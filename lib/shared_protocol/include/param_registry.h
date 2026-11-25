@@ -1,0 +1,130 @@
+#pragma once
+
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+
+namespace fc::proto {
+
+// Parâmetros ajustáveis ao vivo via QGroundControl (MAVLink PARAM_SET) e salvos na NVS
+enum ParamIndex : uint8_t {
+    PARAM_GYRO_LPF_HZ = 0,
+    PARAM_ACCEL_LPF_HZ,
+    PARAM_DTERM_LPF_HZ,
+    PARAM_MAHONY_KP,
+    PARAM_MAHONY_KI,
+    PARAM_ANG_RP_KP,
+    PARAM_MAX_TILT_DEG,
+    PARAM_RATE_RP_KP,
+    PARAM_RATE_RP_KI,
+    PARAM_RATE_RP_KD,
+    PARAM_RATE_YAW_KP,
+    PARAM_RATE_YAW_KI,
+    PARAM_MOTOR_IDLE,
+    PARAM_VBAT_NOMINAL,
+    PARAM_FS_HOVER_THR,
+    PARAM_COUNT
+};
+
+struct FlightParams {
+    float gyro_lpf_hz   = 80.0f;   // Corte Biquad Giroscópio (Hz)
+    float accel_lpf_hz  = 30.0f;   // Corte Biquad Acelerômetro (Hz)
+    float dterm_lpf_hz  = 45.0f;   // Corte Biquad Derivativo PID (Hz)
+    float mahony_kp     = 2.0f;    // Ganho proporcional gravidade Mahony
+    float mahony_ki     = 0.05f;   // Ganho integral bias Mahony
+    float ang_rp_kp     = 4.5f;    // Malha externa Ângulo -> Taxa (1/s)
+    float max_tilt_deg  = 35.0f;   // Inclinação máxima em Stabilize (°)
+    float rate_rp_kp    = 0.14f;   // Ganho P Taxa Roll/Pitch
+    float rate_rp_ki    = 0.18f;   // Ganho I Taxa Roll/Pitch
+    float rate_rp_kd    = 0.0045f; // Ganho D Taxa Roll/Pitch (sobre medição)
+    float rate_yaw_kp   = 0.25f;   // Ganho P Taxa Yaw
+    float rate_yaw_ki   = 0.15f;   // Ganho I Taxa Yaw
+    float motor_idle    = 0.06f;   // Rotação mínima armado (6%)
+    float vbat_nominal  = 11.1f;   // Referência 3S p/ compensação de sag (V)
+    float fs_hover_thr  = 0.36f;   // Throttle inicial de descida em Failsafe
+};
+
+struct ParamMeta {
+    const char name[17]; // Máx 16 chars no padrão MAVLink PARAM_VALUE
+    float min_val;
+    float max_val;
+};
+
+inline constexpr ParamMeta kParamTable[PARAM_COUNT] = {
+    {"GYRO_LPF_HZ",   20.0f, 250.0f},
+    {"ACCEL_LPF_HZ",   5.0f, 100.0f},
+    {"DTERM_LPF_HZ",  15.0f, 150.0f},
+    {"MAHONY_KP",      0.1f,  10.0f},
+    {"MAHONY_KI",      0.0f,   1.0f},
+    {"ANG_RP_KP",      1.0f,  10.0f},
+    {"MAX_TILT_DEG",  15.0f,  55.0f},
+    {"RATE_RP_KP",     0.01f,  1.0f},
+    {"RATE_RP_KI",     0.0f,   1.5f},
+    {"RATE_RP_KD",     0.0f,   0.05f},
+    {"RATE_YAW_KP",    0.01f,  1.0f},
+    {"RATE_YAW_KI",    0.0f,   1.0f},
+    {"MOTOR_IDLE",     0.03f,  0.15f},
+    {"VBAT_NOMINAL",  10.5f,  12.6f},
+    {"FS_HOVER_THR",   0.20f,  0.55f}
+};
+
+inline float* param_ptr_mutable(FlightParams& p, uint8_t idx) noexcept {
+    switch (idx) {
+        case PARAM_GYRO_LPF_HZ:  return &p.gyro_lpf_hz;
+        case PARAM_ACCEL_LPF_HZ: return &p.accel_lpf_hz;
+        case PARAM_DTERM_LPF_HZ: return &p.dterm_lpf_hz;
+        case PARAM_MAHONY_KP:    return &p.mahony_kp;
+        case PARAM_MAHONY_KI:    return &p.mahony_ki;
+        case PARAM_ANG_RP_KP:    return &p.ang_rp_kp;
+        case PARAM_MAX_TILT_DEG: return &p.max_tilt_deg;
+        case PARAM_RATE_RP_KP:   return &p.rate_rp_kp;
+        case PARAM_RATE_RP_KI:   return &p.rate_rp_ki;
+        case PARAM_RATE_RP_KD:   return &p.rate_rp_kd;
+        case PARAM_RATE_YAW_KP:  return &p.rate_yaw_kp;
+        case PARAM_RATE_YAW_KI:  return &p.rate_yaw_ki;
+        case PARAM_MOTOR_IDLE:   return &p.motor_idle;
+        case PARAM_VBAT_NOMINAL: return &p.vbat_nominal;
+        case PARAM_FS_HOVER_THR: return &p.fs_hover_thr;
+        default:                 return nullptr;
+    }
+}
+
+inline bool get_param_by_index(const FlightParams& p, uint8_t idx, float& out_val) noexcept {
+    FlightParams& mutable_ref = const_cast<FlightParams&>(p);
+    const float* ptr = param_ptr_mutable(mutable_ref, idx);
+    if (!ptr) {
+        return false;
+    }
+    out_val = *ptr;
+    return true;
+}
+
+inline bool set_param_by_index(FlightParams& p, uint8_t idx, float new_val) noexcept {
+    if (idx >= PARAM_COUNT || !std::isfinite(new_val)) {
+        return false;
+    }
+    float* ptr = param_ptr_mutable(p, idx);
+    if (!ptr) {
+        return false;
+    }
+    const float lo = kParamTable[idx].min_val;
+    const float hi = kParamTable[idx].max_val;
+    if (new_val < lo) new_val = lo;
+    if (new_val > hi) new_val = hi;
+    *ptr = new_val;
+    return true;
+}
+
+inline int find_param_by_name(const char* mav_name_16) noexcept {
+    if (!mav_name_16) {
+        return -1;
+    }
+    for (uint8_t i = 0; i < PARAM_COUNT; ++i) {
+        if (std::strncmp(kParamTable[i].name, mav_name_16, 16) == 0) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+} // namespace fc::proto
