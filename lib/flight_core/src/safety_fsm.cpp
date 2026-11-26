@@ -141,7 +141,10 @@ SafetyDecision SafetyStateMachine::update(const SafetyInputs& in, float dt_s) no
             }
             break;
 
-        case SystemState::FAILSAFE_DESCEND:
+        case SystemState::FAILSAFE_DESCEND: {
+            const float max_desc_s = in.baro_healthy
+                                         ? cfg_.failsafe_max_baro_descend_s
+                                         : cfg_.failsafe_max_descend_s;
             if (!imu_fresh || in.tilt_cos < crash_flip_cos_) {
                 observed_switch_disarmed_ = false;
                 transition_to(SystemState::FAILSAFE_LOCKED);
@@ -152,13 +155,15 @@ SafetyDecision SafetyStateMachine::update(const SafetyInputs& in, float dt_s) no
                 } else {
                     transition_to(SystemState::DISARMED);
                 }
-            } else if (state_elapsed_s_ >= cfg_.failsafe_max_descend_s ||
+            } else if (in.touchdown_detected ||
+                       state_elapsed_s_ >= max_desc_s ||
                        (!in.allow_no_battery_bench && in.vbat_v > 5.0f &&
                         in.vbat_v < cfg_.critical_flight_vbat_v)) {
                 observed_switch_disarmed_ = false;
                 transition_to(SystemState::FAILSAFE_LOCKED);
             }
             break;
+        }
 
         case SystemState::FAILSAFE_LOCKED:
             // Exige que o piloto coloque explicitamente a chave física ARM em OFF para destravar

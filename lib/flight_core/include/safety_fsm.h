@@ -16,9 +16,10 @@ struct SafetyConfig {
     uint32_t prearm_rc_max_age_us = 150000; // 150 ms p/ considerar rádio vivo no pré-arm
     uint32_t flight_rc_timeout_us = 300000; // 300 ms sem pacotes -> Estágio 1 Failsafe
     uint32_t imu_timeout_us       = 10000;  // 10 ms sem pulso INT1 -> corte de emergência
-    float failsafe_hover_thr      = 0.36f;  // Throttle inicial de descida em Estágio 1
-    float failsafe_min_thr        = 0.20f;  // Piso da rampa de descida antes de cortar
-    float failsafe_max_descend_s  = 6.0f;   // Duração máx de descida cega antes de Estágio 2
+    float failsafe_hover_thr      = 0.36f;  // Throttle inicial de descida cega em Estágio 1
+    float failsafe_min_thr        = 0.20f;  // Piso da rampa de descida cega antes de cortar
+    float failsafe_max_descend_s  = 6.0f;   // Duração máx de descida cega (sem baro) antes de Estágio 2
+    float failsafe_max_baro_descend_s = 45.0f; // Teto seguro p/ descida controlada c/ barômetro (~25m AGL)
 };
 
 struct SafetyInputs {
@@ -29,7 +30,9 @@ struct SafetyInputs {
     RcCommand rc{};
     float tilt_cos            = 1.0f;
     float vbat_v              = 0.0f;
-    bool allow_no_battery_bench = false; // Usado apenas em simulação SITL se desejado
+    bool baro_healthy         = false; // Se true, usa descida controlada por velocidade + detector de pouso
+    bool touchdown_detected   = false; // Acionado pelo AltHoldController ao detectar toque firme na grama
+    bool allow_no_battery_bench = false;
 };
 
 struct SafetyDecision {
@@ -59,6 +62,7 @@ public:
 
     SystemState state() const noexcept { return state_; }
     uint16_t prearm_flags() const noexcept { return prearm_flags_; }
+    float state_elapsed_s() const noexcept { return state_elapsed_s_; }
 
 private:
     uint16_t evaluate_prearm_flags(const SafetyInputs& in, bool rc_fresh_prearm, bool imu_fresh) const noexcept;

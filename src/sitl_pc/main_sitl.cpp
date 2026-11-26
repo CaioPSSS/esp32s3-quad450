@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--headless-demo") == 0) {
             headless_demo = true;
-            if (max_duration_s <= 0.0f) max_duration_s = 10.0f;
+            if (max_duration_s <= 0.0f) max_duration_s = 16.0f;
         } else if (std::strcmp(argv[i], "--duration") == 0 && i + 1 < argc) {
             max_duration_s = std::strtof(argv[++i], nullptr);
         } else if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
@@ -177,16 +177,18 @@ int main(int argc, char** argv) {
     RcCommand rc{};
     rc.throttle = 0.0f;
     rc.arm_switch = false;
+    rc.mode = FlightMode::STABILIZE;
     rc.link_alive = true;
     rc.timestamp_us = 0;
 
+    BaroSample last_baro{};
     SystemState prev_state = SystemState::BOOT_CALIBRATING;
     uint64_t step_idx = 0;
     constexpr float dt_s = 0.001f;
 
     std::printf("=================================================================\n");
     std::printf(" ESP32-S3 Quad-450 SITL 6-DoF Simulator | MAVLink v2 UDP -> :%u\n", gcs_port);
-    std::printf(" Modo: %s\n", headless_demo ? "Roteiro Automatizado de Voo (--headless-demo)"
+    std::printf(" Modo: %s\n", headless_demo ? "Roteiro Fase 1 Completa (ALT_HOLD + Pouso Failsafe Baro)"
                                                 : "Tempo Real Interativo (Abra o QGroundControl!)");
     std::printf("=================================================================\n");
 
@@ -203,23 +205,26 @@ int main(int argc, char** argv) {
             rc.link_alive = true;
             if (t_s < 1.3f) {
                 rc.arm_switch = false;
+                rc.mode = FlightMode::ALT_HOLD;
                 rc.throttle = 0.0f;
-            } else if (t_s < 1.8f) {
-                rc.arm_switch = true;  // Arma em ARMED_IDLE
+            } else if (t_s < 1.7f) {
+                rc.arm_switch = true;  // Arma em ARMED_IDLE (hélices em idle 6% no chão!)
+                rc.mode = FlightMode::ALT_HOLD;
                 rc.throttle = 0.0f;
-            } else if (t_s < 4.5f) {
-                rc.arm_switch = true;  // Decola e sobe
-                rc.throttle = 0.50f;
+            } else if (t_s < 3.7f) {
+                rc.arm_switch = true;  // Sobe em ALT_HOLD (stick acima do centro: 82%)
+                rc.mode = FlightMode::ALT_HOLD;
+                rc.throttle = 0.82f;
                 rc.roll = 0.0f;
-                rc.pitch = 0.0f;
-            } else if (t_s < 6.5f) {
-                rc.throttle = 0.395f;  // Inclina +15 deg p/ direita (Roll=+0.45)
-                rc.roll = 0.45f;
-            } else if (t_s < 8.5f) {
-                rc.throttle = 0.395f;  // Nivela de volta em hover
+            } else if (t_s < 6.0f) {
+                rc.throttle = 0.50f;   // Stick no centro (50%) -> trava altura em ALT_HOLD!
+                rc.roll = 0.45f;       // Faz curva inclinada mantendo a altura!
+            } else if (t_s < 7.5f) {
+                rc.throttle = 0.50f;   // Nivela de volta cravado na mesma altura!
                 rc.roll = 0.0f;
             } else {
-                // Simula perda de pacotes de rádio p/ acionar FAILSAFE_DESCEND!
+                // Simula perda de pacotes ESP-NOW -> FAILSAFE_DESCEND (-0.65 -> -0.35 m/s flare)
+                // -> Toque automático no solo -> FAILSAFE_LOCKED (desliga hélices na grama)!
                 rc.link_alive = false;
             }
         }
@@ -284,10 +289,13 @@ int main(int argc, char** argv) {
             rc.link_alive = true;
         }
 
-        // Passo 1000 Hz: Amostra Sensores -> FlightPipeline -> Física 6-DoF
+        // Passo 1000 Hz: Amostra IMU (1000 Hz) + BMP280 (40 Hz) -> FlightPipeline -> Física 6-DoF
         const ImuSample imu = physics.sample_imu(now_us);
+        if (step_idx % 25ULL == 0ULL) {
+            last_baro = physics.sample_baro(now_us);
+        }
         const PipelineStepOutput step_out = pipeline.step_1khz(
-            imu, rc, physics.truth().vbat_loaded_v, now_us, dt_s);
+            imu, rc, physics.truth().vbat_loaded_v, now_us, dt_s, last_baro);
         physics.step(step_out.motors, dt_s);
 
         const SimTruthState& tr = physics.truth();

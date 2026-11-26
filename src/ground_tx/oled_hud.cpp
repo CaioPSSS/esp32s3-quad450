@@ -89,8 +89,8 @@ const char* short_mode_str(uint8_t m) {
     switch (static_cast<FlightMode>(m)) {
         case FlightMode::STABILIZE: return "STAB";
         case FlightMode::ALT_HOLD:  return "ALTH";
-        case FlightMode::POS_HOLD:  return "POSH";
-        case FlightMode::RTH:       return "RTH!";
+        case FlightMode::POS_HOLD:  return "CINE"; // Fase 1: ALT_HOLD suave (20 deg max)
+        case FlightMode::RTH:       return "CINE";
     }
     return "STAB";
 }

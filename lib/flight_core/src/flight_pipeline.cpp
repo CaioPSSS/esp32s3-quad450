@@ -20,6 +20,10 @@ void FlightPipeline::init(const proto::FlightParams& params,
     ahrs_.reset();
     ahrs_.configure(params_.mahony_kp, params_.mahony_ki);
 
+    vert_est_.reset();
+    alt_ctrl_.reset(params_.fs_hover_thr);
+    alt_ctrl_.configure(params_);
+
     SafetyConfig scfg{};
     scfg.failsafe_hover_thr = params_.fs_hover_thr;
     safety_.configure(scfg);
@@ -29,6 +33,7 @@ void FlightPipeline::init(const proto::FlightParams& params,
     mixer_.configure(params_.motor_idle, params_.vbat_nominal);
 
     was_calibrated_ = false;
+    was_motors_armed_ = false;
 }
 
 void FlightPipeline::apply_params_live(const proto::FlightParams& params) noexcept {
@@ -36,6 +41,7 @@ void FlightPipeline::apply_params_live(const proto::FlightParams& params) noexce
     gyro_lpf_.reconfigure_bumpless(sample_rate_hz_, params_.gyro_lpf_hz);
     accel_lpf_.reconfigure_bumpless(sample_rate_hz_, params_.accel_lpf_hz);
     ahrs_.configure(params_.mahony_kp, params_.mahony_ki);
+    alt_ctrl_.configure(params_);
 
     SafetyConfig scfg{};
     scfg.failsafe_hover_thr = params_.fs_hover_thr;
@@ -52,6 +58,7 @@ bool FlightPipeline::request_gyro_recalibration() noexcept {
         return false; // Jamais recalibra em voo!
     }
     calibrator_.reset();
+    vert_est_.reset();
     was_calibrated_ = false;
     return true;
 }
@@ -79,7 +86,8 @@ PipelineStepOutput FlightPipeline::step_1khz(const ImuSample& imu,
                                              const RcCommand& rc,
                                              float vbat_v,
                                              uint32_t now_us,
-                                             float dt_s) noexcept {
+                                             float dt_s,
+                                             const BaroSample& baro) noexcept {
     PipelineStepOutput out{};
     const float dt = (std::isfinite(dt_s) && dt_s > 0.0f) ? std::min(dt_s, 0.02f) : (1.0f / sample_rate_hz_);
 
@@ -99,7 +107,7 @@ PipelineStepOutput FlightPipeline::step_1khz(const ImuSample& imu,
         }
     }
 
-    // 3. Compensação de bias + Filtragem Biquad 2ª ordem + Mahony Quaternions
+    // 3. Compensação de bias + Filtragem Biquad 2ª ordem + Mahony Quaternions + Fusão Vertical
     Vec3f gyro_filt{};
     Vec3f accel_filt = imu.accel_ms2;
     if (imu.healthy && calibrator_.is_calibrated()) {
@@ -107,9 +115,18 @@ PipelineStepOutput FlightPipeline::step_1khz(const ImuSample& imu,
         gyro_filt  = gyro_lpf_.apply(gyro_unbiased);
         accel_filt = accel_lpf_.apply(imu.accel_ms2);
         ahrs_.update(gyro_filt, accel_filt, dt);
+
+        if (baro.healthy) {
+            vert_est_.correct_baro(baro, was_motors_armed_);
+        }
+        vert_est_.predict_1khz(ahrs_.earth_accel_up_ms2(), was_motors_armed_, dt);
+    } else if (baro.healthy) {
+        vert_est_.correct_baro(baro, false);
     }
 
-    // 4. Máquina de Estados de Segurança e Failsafe
+    const bool baro_ok = vert_est_.is_baro_healthy(now_us);
+
+    // 4. Máquina de Estados de Segurança e Failsafe (c/ detecção automática de pouso na grama!)
     SafetyInputs sin{};
     sin.now_us = now_us;
     sin.imu_healthy = imu.healthy;
@@ -118,18 +135,58 @@ PipelineStepOutput FlightPipeline::step_1khz(const ImuSample& imu,
     sin.rc = rc;
     sin.tilt_cos = ahrs_.tilt_cos();
     sin.vbat_v = vbat_filt;
+    sin.baro_healthy = baro_ok;
+    sin.touchdown_detected = alt_ctrl_.is_touchdown_detected();
     sin.allow_no_battery_bench = allow_no_bat_;
 
     const SafetyDecision sdec = safety_.update(sin, dt);
+    was_motors_armed_ = sdec.motors_armed;
     out.buzzer_siren = sdec.buzzer_siren;
 
-    // 5. Controle de Atitude em Cascata + Mixer Quad-X
+    // 5. Seleção de Modo de Voo Fase 1 + Controle Vertical + CascadedPID + Mixer Quad-X
     TorqueCommand torque{};
+    float effective_throttle = sdec.effective_rc.throttle;
+    FlightMode reported_mode = sdec.effective_rc.mode;
+
     if (!sdec.motors_armed) {
         pid_.reset();
+        alt_ctrl_.observe_manual_flight(0.0f, false, ahrs_.tilt_cos(), vert_est_, dt);
     } else {
-        const float max_tilt_rad = params_.max_tilt_deg * kDegToRad;
-        const float max_yaw_rads = 150.0f * kDegToRad;
+        // Na Fase 1 (sem GPS):
+        // - STABILIZE: throttle 100% manual + inclinação normal (35°)
+        // - ALT_HOLD: trava altura c/ Baro+AccelZ (±1.8 m/s) + inclinação normal (35°)
+        // - POS_HOLD/RTH (Posição 3 da chave): opera como ALT_CINE (Iniciante/Filmagem:
+        //   trava altura suave ±1.0 m/s + inclinação máxima reduzida p/ 20°!)
+        const bool cine_gentle_mode = (sdec.effective_rc.mode == FlightMode::POS_HOLD ||
+                                       sdec.effective_rc.mode == FlightMode::RTH);
+        const bool want_alt_hold = (sdec.effective_rc.mode != FlightMode::STABILIZE);
+
+        if (sdec.state == SystemState::FAILSAFE_DESCEND) {
+            if (baro_ok) {
+                effective_throttle = alt_ctrl_.update_failsafe_descent(
+                    vert_est_, safety_.state_elapsed_s(), dt);
+            } else {
+                // Sem barômetro saudável -> mantém rampa de segurança de malha aberta da FSM
+                alt_ctrl_.observe_manual_flight(effective_throttle, true, ahrs_.tilt_cos(), vert_est_, dt);
+            }
+        } else if (sdec.in_air && want_alt_hold && baro_ok) {
+            const float max_vz_ms = cine_gentle_mode ? 1.0f : 1.8f;
+            effective_throttle = alt_ctrl_.update_alt_hold(
+                sdec.effective_rc.throttle, max_vz_ms, vert_est_, dt);
+        } else {
+            // Em ARMED_IDLE no chão ou STABILIZE (ou fallback se Baro ausente)
+            if (want_alt_hold && !baro_ok) {
+                reported_mode = FlightMode::STABILIZE;
+            }
+            alt_ctrl_.observe_manual_flight(
+                effective_throttle, sdec.in_air, ahrs_.tilt_cos(), vert_est_, dt);
+        }
+
+        const float mode_tilt_deg = cine_gentle_mode
+                                        ? std::min(params_.max_tilt_deg, 20.0f)
+                                        : params_.max_tilt_deg;
+        const float max_tilt_rad = mode_tilt_deg * kDegToRad;
+        const float max_yaw_rads = (cine_gentle_mode ? 90.0f : 150.0f) * kDegToRad;
 
         const float roll_sp_rad  = shape_stick(sdec.effective_rc.roll)  * max_tilt_rad;
         const float pitch_sp_rad = shape_stick(sdec.effective_rc.pitch) * max_tilt_rad;
@@ -147,16 +204,18 @@ PipelineStepOutput FlightPipeline::step_1khz(const ImuSample& imu,
 
     out.motors = mixer_.mix(sdec.motors_armed,
                             sdec.in_air,
-                            sdec.effective_rc.throttle,
+                            effective_throttle,
                             torque,
                             ahrs_.tilt_cos(),
                             vbat_filt);
 
     // 6. Preenche Snapshot de Telemetria (Core 0 / MAVLink / OLED)
     out.telemetry.state = sdec.state;
-    out.telemetry.mode = sdec.effective_rc.mode;
+    out.telemetry.mode = reported_mode;
     out.telemetry.prearm_flags = sdec.prearm_flags;
     out.telemetry.attitude = ahrs_.euler();
+    out.telemetry.altitude_m = vert_est_.altitude_m();
+    out.telemetry.climb_rate_ms = vert_est_.climb_rate_ms();
     out.telemetry.vbat_v = vbat_filt;
     out.telemetry.motors = out.motors;
     out.telemetry.loop_dt_us = static_cast<uint16_t>(std::clamp(dt * 1e6f, 0.0f, 65535.0f));
@@ -171,7 +230,8 @@ PipelineStepOutput FlightPipeline::step_1khz(const ImuSample& imu,
     out.blackbox.flags = static_cast<uint8_t>((sdec.motors_armed ? 0x01u : 0u) |
                                               (sdec.in_air ? 0x02u : 0u) |
                                               (mixer_.was_saturated() ? 0x04u : 0u) |
-                                              (ahrs_.is_accel_gate_open() ? 0x08u : 0u));
+                                              (ahrs_.is_accel_gate_open() ? 0x08u : 0u) |
+                                              (baro_ok ? 0x10u : 0u));
     out.blackbox.gyro_raw_rads[0]  = imu.gyro_rads.x;
     out.blackbox.gyro_raw_rads[1]  = imu.gyro_rads.y;
     out.blackbox.gyro_raw_rads[2]  = imu.gyro_rads.z;

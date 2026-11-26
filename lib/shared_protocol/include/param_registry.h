@@ -6,7 +6,7 @@
 
 namespace fc::proto {
 
-// Parâmetros ajustáveis ao vivo via QGroundControl (MAVLink PARAM_SET) e salvos na NVS
+// Parâmetros ajustáveis ao vivo via QGroundControl (MAVLink PARAM_SET), CLI USB e salvos na NVS
 enum ParamIndex : uint8_t {
     PARAM_GYRO_LPF_HZ = 0,
     PARAM_ACCEL_LPF_HZ,
@@ -23,6 +23,10 @@ enum ParamIndex : uint8_t {
     PARAM_MOTOR_IDLE,
     PARAM_VBAT_NOMINAL,
     PARAM_FS_HOVER_THR,
+    PARAM_ALT_HOLD_KP,
+    PARAM_VEL_Z_KP,
+    PARAM_VEL_Z_KI,
+    PARAM_VEL_Z_KD,
     PARAM_COUNT
 };
 
@@ -33,7 +37,7 @@ struct FlightParams {
     float mahony_kp     = 0.20f;   // Ganho proporcional gravidade em voo (tau=5s: zero washout em curvas!)
     float mahony_ki     = 0.008f;  // Ganho integral bias Mahony (ativo apenas nivelado)
     float ang_rp_kp     = 4.5f;    // Malha externa Ângulo -> Taxa (1/s)
-    float max_tilt_deg  = 35.0f;   // Inclinação máxima em Stabilize (°)
+    float max_tilt_deg  = 35.0f;   // Inclinação máxima em Stabilize / AltHold (°)
     float rate_rp_kp    = 0.14f;   // Ganho P Taxa Roll/Pitch
     float rate_rp_ki    = 0.28f;   // Ganho I Taxa Roll/Pitch (rejeição rápida de rajada/CG)
     float rate_rp_kd    = 0.0045f; // Ganho D Taxa Roll/Pitch (sobre medição)
@@ -41,7 +45,11 @@ struct FlightParams {
     float rate_yaw_ki   = 0.15f;   // Ganho I Taxa Yaw
     float motor_idle    = 0.06f;   // Rotação mínima armado (6%)
     float vbat_nominal  = 11.1f;   // Referência 3S p/ compensação de sag (V)
-    float fs_hover_thr  = 0.36f;   // Throttle inicial de descida em Failsafe
+    float fs_hover_thr  = 0.36f;   // Throttle base inicial de hover / Failsafe
+    float alt_hold_kp   = 1.15f;   // Malha externa AltHold: erro m -> razão subida m/s
+    float vel_z_kp      = 0.22f;   // Malha interna Velocidade Vertical: ganho P
+    float vel_z_ki      = 0.14f;   // Malha interna Velocidade Vertical: ganho I
+    float vel_z_kd      = 0.028f;  // Amortecimento direto via aceleração vertical Earth-Z
 };
 
 struct ParamMeta {
@@ -65,7 +73,11 @@ inline constexpr ParamMeta kParamTable[PARAM_COUNT] = {
     {"RATE_YAW_KI",    0.0f,   1.0f},
     {"MOTOR_IDLE",     0.03f,  0.15f},
     {"VBAT_NOMINAL",  10.5f,  12.6f},
-    {"FS_HOVER_THR",   0.20f,  0.55f}
+    {"FS_HOVER_THR",   0.20f,  0.55f},
+    {"ALT_HOLD_KP",    0.20f,  4.00f},
+    {"VEL_Z_KP",       0.05f,  0.80f},
+    {"VEL_Z_KI",       0.00f,  0.60f},
+    {"VEL_Z_KD",       0.00f,  0.15f}
 };
 
 inline float* param_ptr_mutable(FlightParams& p, uint8_t idx) noexcept {
@@ -85,6 +97,10 @@ inline float* param_ptr_mutable(FlightParams& p, uint8_t idx) noexcept {
         case PARAM_MOTOR_IDLE:   return &p.motor_idle;
         case PARAM_VBAT_NOMINAL: return &p.vbat_nominal;
         case PARAM_FS_HOVER_THR: return &p.fs_hover_thr;
+        case PARAM_ALT_HOLD_KP:  return &p.alt_hold_kp;
+        case PARAM_VEL_Z_KP:     return &p.vel_z_kp;
+        case PARAM_VEL_Z_KI:     return &p.vel_z_ki;
+        case PARAM_VEL_Z_KD:     return &p.vel_z_kd;
         default:                 return nullptr;
     }
 }

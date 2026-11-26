@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "alt_estimator.h"
 #include "biquad_lpf.h"
 #include "fc_types.h"
 #include "gyro_calibrator.h"
@@ -13,7 +14,7 @@
 
 namespace fc {
 
-// Frame de alta resolução (64 bytes exatos) pronto para gravação na PSRAM Blackbox (Sprint 6)
+// Frame de alta resolução (64 bytes exatos) pronto para gravação na PSRAM Blackbox
 #pragma pack(push, 1)
 struct BlackboxFrame {
     uint32_t timestamp_us      = 0;               // 4
@@ -41,11 +42,12 @@ struct PipelineStepOutput {
 };
 
 /**
- * Orquestrador Determinístico de 1000 Hz da Controladora de Voo (`flight_core`).
+ * Orquestrador Determinístico de 1000 Hz da Controladora de Voo (`flight_core` — Fase 1 Completa).
  *
  * Conecta em cascata:
- *   ImuSample -> GyroCalibrator -> BiquadVec3 (Gyro/Accel) -> MahonyAHRS
- *   -> SafetyStateMachine -> Curva Stick/Deadband -> CascadedPID -> QuadXMixer.
+ *   ImuSample + BaroSample -> GyroCalibrator -> BiquadVec3 -> MahonyAHRS
+ *   -> VerticalEstimator (Accel-Z + Baro) -> SafetyStateMachine (c/ Touchdown Disarm)
+ *   -> AltHoldController (STABILIZE / ALT_HOLD / ALT_CINE / FAILSAFE) -> CascadedPID -> QuadXMixer.
  *
  * Zero alocação dinâmica, tempo constante O(1), idêntico no SITL (PC) e no ESP32-S3!
  */
@@ -64,12 +66,14 @@ public:
 
     /**
      * Executa 1 passo completo da malha de tempo real (1 ms @ 1000 Hz).
+     * Se `baro.healthy == false` (ex.: teste sem BMP280), faz fallback limpo para STABILIZE!
      */
     PipelineStepOutput step_1khz(const ImuSample& imu,
                                  const RcCommand& rc,
                                  float vbat_v,
                                  uint32_t now_us,
-                                 float dt_s) noexcept;
+                                 float dt_s,
+                                 const BaroSample& baro = BaroSample{}) noexcept;
 
     /**
      * Permite recalibrar o giroscópio sob comando de solo (apenas quando DISARMED).
@@ -85,6 +89,8 @@ public:
 
     const proto::FlightParams& params() const noexcept { return params_; }
     const MahonyAHRS& ahrs() const noexcept { return ahrs_; }
+    const VerticalEstimator& vertical_estimator() const noexcept { return vert_est_; }
+    const AltHoldController& alt_hold_controller() const noexcept { return alt_ctrl_; }
     const GyroCalibrator& calibrator() const noexcept { return calibrator_; }
     const SafetyStateMachine& safety() const noexcept { return safety_; }
 
@@ -99,11 +105,14 @@ private:
     BiquadVec3 accel_lpf_{};
     BiquadLPF vbat_lpf_{};
     MahonyAHRS ahrs_{};
+    VerticalEstimator vert_est_{};
+    AltHoldController alt_ctrl_{};
     SafetyStateMachine safety_{};
     CascadedPID pid_{};
     QuadXMixer mixer_{};
 
     bool was_calibrated_ = false;
+    bool was_motors_armed_ = false;
     bool allow_no_bat_ = false;
 };
 

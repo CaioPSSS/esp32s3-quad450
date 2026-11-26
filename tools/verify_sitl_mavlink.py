@@ -49,14 +49,21 @@ def main() -> int:
         print("[2/4] Solicitando lista completa de parametros (PARAM_REQUEST_LIST)...")
         conn.mav.param_request_list_send(conn.target_system, conn.target_component)
         params_rx = {}
+        expected_total = 19
         deadline = time.time() + 2.5
-        while time.time() < deadline and len(params_rx) < 15:
+        while time.time() < deadline and len(params_rx) < expected_total:
             msg = conn.recv_match(type="PARAM_VALUE", blocking=True, timeout=0.5)
             if msg:
+                expected_total = msg.param_count
                 params_rx[msg.param_id] = msg.param_value
 
-        assert len(params_rx) == 15, f"Esperava 15 parametros, recebeu {len(params_rx)}: {list(params_rx.keys())}"
-        print(f"      OK! 15/15 parametros recebidos (RATE_RP_KP={params_rx['RATE_RP_KP']:.4f})")
+        assert len(params_rx) == expected_total and "ALT_HOLD_KP" in params_rx, (
+            f"Esperava {expected_total} parametros, recebeu {len(params_rx)}: {list(params_rx.keys())}"
+        )
+        print(
+            f"      OK! {len(params_rx)}/{expected_total} parametros recebidos "
+            f"(RATE_RP_KP={params_rx['RATE_RP_KP']:.4f}, ALT_HOLD_KP={params_rx['ALT_HOLD_KP']:.4f})"
+        )
 
         print("[3/4] Ajustando RATE_RP_KP ao vivo via PARAM_SET (0.14 -> 0.19)...")
         conn.mav.param_set_send(

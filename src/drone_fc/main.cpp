@@ -47,7 +47,7 @@ constexpr int kPinRgbLed    = 48; // LED RGB onboard do ESP32-S3-DevKitC-1
 
 constexpr float   kVbatDividerScale = (33.0f + 10.0f) / 10.0f; // 4.30x
 constexpr uint8_t kWifiLrChannel    = 1;
-constexpr uint32_t kNvsParamMagic   = 0x51343530u; // "Q450"
+constexpr uint32_t kNvsParamMagic   = 0x51343531u; // "Q451" (19 params c/ AltHold)
 
 // Periféricos e Módulos Globais
 SPIClass         g_imu_spi(FSPI);
@@ -280,8 +280,8 @@ void flight_control_task(void* /*arg*/) {
         const float vbat_v = g_vbat_lock.read();
         const BaroNavShared baro_nav = g_baro_lock.read();
 
-        // 4. Executa 1 passo determinístico de 1000 Hz do `flight_core`
-        PipelineStepOutput step_out = g_pipeline.step_1khz(imu, rc, vbat_v, now_us, dt_s);
+        // 4. Executa 1 passo determinístico de 1000 Hz do `flight_core` (c/ Fusão Vertical + AltHold!)
+        PipelineStepOutput step_out = g_pipeline.step_1khz(imu, rc, vbat_v, now_us, dt_s, baro_nav.baro);
 
         // 5. Acionamento seguro dos 4 ESCs (400 Hz 14-bit LEDC)
         if (step_out.telemetry.state == SystemState::BENCH_DIAGNOSTIC) {
@@ -306,16 +306,12 @@ void flight_control_task(void* /*arg*/) {
                                  st == SystemState::FAILSAFE_DESCEND);
         g_blackbox.push_from_core1(step_out.blackbox, should_rec);
 
-        // 7. Métricas de CPU do Core 1 e publicação de telemetria para o Core 0
+        // 7. Métricas de CPU do Core 1 e publicação de telemetria fundida para o Core 0
         const uint32_t exec_us = static_cast<uint32_t>(esp_timer_get_time()) - now_us;
         const float inst_pct = static_cast<float>(exec_us) * 0.1f; // exec_us / 1000us * 100%
         cpu_load_ema = 0.98f * cpu_load_ema + 0.02f * inst_pct;
 
         step_out.telemetry.cpu_load_pct = static_cast<uint8_t>(std::clamp(std::lround(cpu_load_ema), 1L, 100L));
-        if (baro_nav.baro.healthy) {
-            step_out.telemetry.altitude_m = baro_nav.baro.altitude_m;
-            step_out.telemetry.climb_rate_ms = baro_nav.climb_rate_ms;
-        }
 
         Core1OutShared c1_snap{};
         c1_snap.telem = step_out.telemetry;
