@@ -56,6 +56,11 @@ bool FlightPipeline::request_gyro_recalibration() noexcept {
     return true;
 }
 
+bool FlightPipeline::set_bench_diagnostic_mode(bool active) noexcept {
+    safety_.set_bench_diagnostic_mode(active);
+    return (safety_.state() == SystemState::BENCH_DIAGNOSTIC) == active;
+}
+
 float FlightPipeline::shape_stick(float v, float deadband, float expo) noexcept {
     if (!std::isfinite(v)) {
         return 0.0f;

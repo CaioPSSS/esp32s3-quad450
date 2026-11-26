@@ -76,6 +76,11 @@ public:
      */
     bool request_gyro_recalibration() noexcept;
 
+    /**
+     * Ativa/desativa o modo BENCH_DIAGNOSTIC na máquina de segurança (apenas quando DISARMED).
+     */
+    bool set_bench_diagnostic_mode(bool active) noexcept;
+
     void set_allow_no_battery_bench(bool allow) noexcept { allow_no_bat_ = allow; }
 
     const proto::FlightParams& params() const noexcept { return params_; }
