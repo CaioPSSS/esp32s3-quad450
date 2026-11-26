@@ -30,12 +30,12 @@ struct FlightParams {
     float gyro_lpf_hz   = 80.0f;   // Corte Biquad Giroscópio (Hz)
     float accel_lpf_hz  = 30.0f;   // Corte Biquad Acelerômetro (Hz)
     float dterm_lpf_hz  = 45.0f;   // Corte Biquad Derivativo PID (Hz)
-    float mahony_kp     = 2.0f;    // Ganho proporcional gravidade Mahony
-    float mahony_ki     = 0.05f;   // Ganho integral bias Mahony
+    float mahony_kp     = 0.20f;   // Ganho proporcional gravidade em voo (tau=5s: zero washout em curvas!)
+    float mahony_ki     = 0.008f;  // Ganho integral bias Mahony (ativo apenas nivelado)
     float ang_rp_kp     = 4.5f;    // Malha externa Ângulo -> Taxa (1/s)
     float max_tilt_deg  = 35.0f;   // Inclinação máxima em Stabilize (°)
     float rate_rp_kp    = 0.14f;   // Ganho P Taxa Roll/Pitch
-    float rate_rp_ki    = 0.18f;   // Ganho I Taxa Roll/Pitch
+    float rate_rp_ki    = 0.28f;   // Ganho I Taxa Roll/Pitch (rejeição rápida de rajada/CG)
     float rate_rp_kd    = 0.0045f; // Ganho D Taxa Roll/Pitch (sobre medição)
     float rate_yaw_kp   = 0.25f;   // Ganho P Taxa Yaw
     float rate_yaw_ki   = 0.15f;   // Ganho I Taxa Yaw

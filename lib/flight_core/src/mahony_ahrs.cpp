@@ -120,8 +120,9 @@ void MahonyAHRS::update_with_heading(const Vec3f& gyro_rads,
         const Vec3f err_grav = g_meas.cross(g_est);
         err_total = err_total + (err_grav * kp_);
 
-        // O termo integral aprende apenas quando a gravidade é confiável
-        if (ki_ > 0.0f) {
+        // O termo integral aprende apenas quando a gravidade é confiável e o drone está quase nivelado (< 10°),
+        // evitando que aceleração centrípeta/lateral em curvas inclinadas crie falso bias!
+        if (ki_ > 0.0f && g_est.z > 0.9848f) {
             integral_fb_.x = std::clamp(integral_fb_.x + ki_ * err_grav.x * dt, -kMaxIntegralBias, kMaxIntegralBias);
             integral_fb_.y = std::clamp(integral_fb_.y + ki_ * err_grav.y * dt, -kMaxIntegralBias, kMaxIntegralBias);
             integral_fb_.z = std::clamp(integral_fb_.z + ki_ * err_grav.z * dt, -kMaxIntegralBias, kMaxIntegralBias);
