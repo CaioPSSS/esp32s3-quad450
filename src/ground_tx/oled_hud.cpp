@@ -230,14 +230,15 @@ void OledHud::render_hud(const HudDisplayData& d) noexcept {
 
     char line[26];
 
-    // Linha 1 (Topo): Estado + Modo + RSSI
+    // Linha 1 (Topo): Estado + Modo + pior RSSI entre Uplink (Drone) e Downlink (TX)
     if (!d.drone_linked) {
         std::snprintf(line, sizeof(line), "BUSCANDO DRONE... LR");
     } else {
+        const int worst_rssi = std::min<int>(d.telem.drone_rssi_dbm, d.tx_rssi_dbm);
         std::snprintf(line, sizeof(line), "%-8s %-4s %4ddB",
                       short_state_str(d.telem.state),
                       short_mode_str(d.telem.flight_mode),
-                      static_cast<int>(d.telem.drone_rssi_dbm));
+                      worst_rssi);
     }
     draw_text(0, 0, line);
     draw_hline(0, 9, 128);
@@ -254,8 +255,10 @@ void OledHud::render_hud(const HudDisplayData& d) noexcept {
                   static_cast<float>(d.telem.alt_cm) / 100.0f);
     draw_text(0, 24, line);
 
-    // Linha 4: Diagnóstico de Pré-Arm ou Barra de Throttle
-    if (d.drone_linked && d.telem.state == static_cast<uint8_t>(SystemState::DISARMED)) {
+    // Linha 4: Toast de gravação NVS, Diagnóstico de Pré-Arm ou Barra de Throttle
+    if (d.nvs_save_toast) {
+        draw_text(0, 36, "SALVANDO NVS DRONE!");
+    } else if (d.drone_linked && d.telem.state == static_cast<uint8_t>(SystemState::DISARMED)) {
         draw_text(0, 36, first_prearm_reason(d.telem.prearm_flags));
     } else {
         std::snprintf(line, sizeof(line), "THR:%3u%%  SW:%s",

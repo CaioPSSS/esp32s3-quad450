@@ -26,7 +26,8 @@ MotorOutput QuadXMixer::mix(bool armed,
                             float throttle_cmd,
                             const TorqueCommand& torque,
                             float tilt_cos,
-                            float vbat_measured_v) noexcept {
+                            float vbat_measured_v,
+                            bool allow_airmode) noexcept {
     MotorOutput out{};
     saturated_ = false;
 
@@ -74,7 +75,8 @@ MotorOutput QuadXMixer::mix(bool armed,
         +r + p - y  // M4: Frente-Esquerda (FL, CW)
     };
 
-    // 5. Desaturação Airmode: preserva 100% da razão diferencial de atitude!
+    // 5. Desaturação Airmode: preserva a razão diferencial de atitude em voo, mas suprime o
+    //    impulso positivo de acelerador no toque em solo inclinado (`allow_airmode == false`)!
     float diff_min = diff[0];
     float diff_max = diff[0];
     for (int i = 1; i < 4; ++i) {
@@ -82,10 +84,11 @@ MotorOutput QuadXMixer::mix(bool armed,
         diff_max = std::max(diff_max, diff[i]);
     }
 
-    const float max_span = 1.0f - motor_idle_;
+    const float max_span = allow_airmode ? (1.0f - motor_idle_)
+                                         : std::max(2.0f * (thr_effective - motor_idle_), 0.22f);
     const float req_span = diff_max - diff_min;
     if (req_span > max_span && req_span > 1e-6f) {
-        // Excede a faixa física total [idle .. 1.0]: comprime proporcionalmente e avisa anti-windup
+        // Excede a faixa física permitida: comprime proporcionalmente e avisa anti-windup
         const float compression = max_span / req_span;
         for (int i = 0; i < 4; ++i) {
             diff[i] *= compression;
@@ -95,14 +98,17 @@ MotorOutput QuadXMixer::mix(bool armed,
         saturated_ = true;
     }
 
-    // Desloca o throttle comum se algum motor passar de 1.0 ou cair abaixo de motor_idle_
+    // Desloca o throttle p/ baixo se algum motor passar de 1.0 (sempre seguro), mas só desloca
+    // p/ cima (`Airmode boost`) quando `allow_airmode == true` (evita re-decolagem/capotagem no chão!)
     float thr_shifted = thr_effective;
     if (thr_shifted + diff_max > 1.0f) {
         thr_shifted = 1.0f - diff_max;
         saturated_ = true;
     }
     if (thr_shifted + diff_min < motor_idle_) {
-        thr_shifted = motor_idle_ - diff_min;
+        if (allow_airmode) {
+            thr_shifted = motor_idle_ - diff_min;
+        }
         saturated_ = true;
     }
 
@@ -113,12 +119,16 @@ MotorOutput QuadXMixer::mix(bool armed,
     return out;
 }
 
-uint16_t QuadXMixer::to_pwm_us(float motor_norm, bool armed) noexcept {
+float QuadXMixer::to_pwm_us_f(float motor_norm, bool armed) noexcept {
     if (!armed || !std::isfinite(motor_norm)) {
-        return 1000u;
+        return 1000.0f;
     }
     const float clamped = std::clamp(motor_norm, 0.0f, 1.0f);
-    return static_cast<uint16_t>(std::lround(1000.0f + 1000.0f * clamped));
+    return 1000.0f + 1000.0f * clamped;
+}
+
+uint16_t QuadXMixer::to_pwm_us(float motor_norm, bool armed) noexcept {
+    return static_cast<uint16_t>(std::lround(to_pwm_us_f(motor_norm, armed)));
 }
 
 } // namespace fc

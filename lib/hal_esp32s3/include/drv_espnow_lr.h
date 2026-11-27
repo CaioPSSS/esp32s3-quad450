@@ -11,12 +11,13 @@ using EspNowRxHandler = void (*)(const uint8_t mac[6],
                                  int8_t rssi_dbm);
 
 /**
- * Driver compartilhado ESP-NOW Long Range (WIFI_PROTOCOL_LR @ 19.5 dBm) para ESP32-S3.
+ * Driver compartilhado ESP-NOW Long Range (WIFI_PROTOCOL_LR @ 250 kbps, 19.5 dBm) para ESP32-S3.
  *
  * Recursos:
- * - Configura Wi-Fi STA sem conectar a roteador, trava canal fixo e ativa PHY Long Range
- *   da Espressif (~500 m a 1+ km com antenas externas IPEX 3-5 dBi!).
- * - Captura o RSSI real em dBm de cada pacote recebido via filtro promíscuo leve.
+ * - Configura Wi-Fi STA sem conectar a roteador, trava canal fixo e ativa PHY Long Range puro
+ *   (`WIFI_PHY_MODE_LR` @ `WIFI_PHY_RATE_LORA_250K`, ~500 m a 1+ km c/ antenas IPEX 3-5 dBi!).
+ * - Captura o RSSI nativo por pacote (`rx_ctrl->rssi` no ESP-IDF 5.x) filtrado pelo MAC pareado,
+ *   imune a beacons de roteadores Wi-Fi vizinhos.
  * - Suporta Auto-Bind (inicia em Broadcast FF:FF:FF:FF:FF:FF e registra peer Unicast
  *   automaticamente quando solicitado após validar pacote com CRC16!).
  */
@@ -41,6 +42,7 @@ public:
 
 private:
     uint8_t channel_ = 1;
+    bool lr_mode_ = true;
     uint8_t peer_mac_[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     bool has_peer_ = false;
 };

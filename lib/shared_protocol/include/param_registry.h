@@ -31,9 +31,9 @@ enum ParamIndex : uint8_t {
 };
 
 struct FlightParams {
-    float gyro_lpf_hz   = 80.0f;   // Corte Biquad Giroscópio (Hz)
+    float gyro_lpf_hz   = 65.0f;   // Corte Biquad Giroscópio (Hz) — rejeita 1x RPM hover (63-80 Hz)
     float accel_lpf_hz  = 30.0f;   // Corte Biquad Acelerômetro (Hz)
-    float dterm_lpf_hz  = 45.0f;   // Corte Biquad Derivativo PID (Hz)
+    float dterm_lpf_hz  = 35.0f;   // Corte Biquad Derivativo PID (Hz) — evita aquecimento em hélices 10"
     float mahony_kp     = 0.20f;   // Ganho proporcional gravidade em voo (tau=5s: zero washout em curvas!)
     float mahony_ki     = 0.008f;  // Ganho integral bias Mahony (ativo apenas nivelado)
     float ang_rp_kp     = 4.5f;    // Malha externa Ângulo -> Taxa (1/s)

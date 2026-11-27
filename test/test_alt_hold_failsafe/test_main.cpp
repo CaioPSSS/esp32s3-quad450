@@ -205,10 +205,139 @@ void test_closed_loop_6dof_baro_failsafe_flare_and_auto_touchdown_disarm() {
     TEST_ASSERT_TRUE(last_out.buzzer_siren);
 }
 
+// 4. Regressão P0-CTRL-2: Perda do BMP280 em pleno voo ALT_HOLD com stick em 50% NÃO pode
+//    disparar o drone para cima (deve mapear 50% suavemente para learned_hover_throttle ~29%)!
+void test_bumpless_baro_loss_in_alt_hold_prevents_50pct_throttle_climb() {
+    FlightParams params{};
+    FlightPipeline fc_pipe;
+    fc_pipe.init(params, 1000.0f, 1000u);
+
+    QuadPhysics6DoF phys;
+    phys.reset(0.0f, 0.0f);
+
+    RcCommand rc{};
+    rc.link_alive = true;
+    rc.mode = FlightMode::ALT_HOLD;
+
+    BaroSample baro{};
+    constexpr float dt = 0.001f;
+    float alt_at_baro_failure = 0.0f;
+    float max_alt_after_failure = 0.0f;
+    float max_vz_after_failure = 0.0f;
+
+    for (uint32_t step = 0; step < 9000; ++step) {
+        const uint32_t now_us = step * 1000u;
+        const float t_s = step * dt;
+        rc.timestamp_us = now_us;
+
+        if (t_s < 1.2f) {
+            rc.arm_switch = false;
+            rc.throttle = 0.0f;
+        } else if (t_s < 1.5f) {
+            rc.arm_switch = true;
+            rc.throttle = 0.0f;
+        } else if (t_s < 3.2f) {
+            rc.throttle = 0.80f;
+        } else {
+            rc.throttle = 0.50f; // Stick centralizado em ALT_HOLD
+        }
+
+        // Em t = 6.0s, o fio SDA do BMP280 rompe (baro para de atualizar!)
+        if (t_s < 6.0f && (step % 25 == 0)) {
+            baro = phys.sample_baro(now_us);
+        }
+        if (step == 6000) {
+            alt_at_baro_failure = phys.truth().altitude_m();
+        }
+
+        const ImuSample imu = phys.sample_imu(now_us);
+        const PipelineStepOutput out = fc_pipe.step_1khz(
+            imu, rc, phys.truth().vbat_loaded_v, now_us, dt, baro);
+        phys.step(out.motors, dt);
+
+        if (step >= 6000) {
+            max_alt_after_failure = std::max(max_alt_after_failure, phys.truth().altitude_m());
+            max_vz_after_failure = std::max(max_vz_after_failure, phys.truth().climb_rate_ms());
+        }
+    }
+
+    // Antes do fix, 50% bruto lançava o drone +6.3 m em 2s (+5.4 m/s)!
+    // Com remapeamento bumpless p/ hover aprendido, a subida espúria fica < 0.45 m e Vz < 0.35 m/s!
+    TEST_ASSERT_TRUE(alt_at_baro_failure > 1.2f);
+    TEST_ASSERT_LESS_THAN_FLOAT(alt_at_baro_failure + 0.45f, max_alt_after_failure);
+    TEST_ASSERT_LESS_THAN_FLOAT(0.35f, max_vz_after_failure);
+}
+
+// 5. Regressão P0-CTRL-1: Pouso com throttle zerado sobre rampa inclinada (+8° Roll)
+//    drena o integrador I, bloqueia boost Airmode e retorna para ARMED_IDLE sem acelerar!
+void test_sloped_ground_landing_does_not_spool_motors_or_bounce() {
+    FlightParams params{};
+    FlightPipeline fc_pipe;
+    fc_pipe.init(params, 1000.0f, 1000u);
+
+    RcCommand rc{};
+    rc.link_alive = true;
+    rc.mode = FlightMode::STABILIZE;
+
+    BaroSample baro{};
+    baro.healthy = true;
+    constexpr float dt = 0.001f;
+
+    // 1. Calibra em solo plano (1.2s), arma e entra em FLYING
+    for (uint32_t step = 0; step < 2000; ++step) {
+        const uint32_t now_us = step * 1000u;
+        rc.timestamp_us = now_us;
+        baro.timestamp_us = now_us;
+        ImuSample imu{};
+        imu.accel_ms2 = {0.0f, 0.0f, -9.80665f};
+        imu.timestamp_us = now_us;
+        imu.healthy = true;
+
+        if (step < 1200) {
+            rc.arm_switch = false;
+            rc.throttle = 0.0f;
+        } else if (step < 1500) {
+            rc.arm_switch = true;
+            rc.throttle = 0.0f;
+        } else {
+            rc.arm_switch = true;
+            rc.throttle = 0.35f; // Entra em FLYING
+        }
+        (void)fc_pipe.step_1khz(imu, rc, 11.8f, now_us, dt, baro);
+    }
+
+    // 2. Pousa numa rampa inclinada a +8.0° em Roll com stick de throttle em 0% por 1.5s!
+    const float slope_rad = 8.0f * kDegToRad;
+    PipelineStepOutput out{};
+    for (uint32_t step = 2000; step < 3500; ++step) {
+        const uint32_t now_us = step * 1000u;
+        rc.timestamp_us = now_us;
+        rc.throttle = 0.0f;
+        baro.timestamp_us = now_us;
+
+        ImuSample imu{};
+        // Gravidade projetada no chassi parado a +8° de Roll: ay = -g*sin(phi), az = -g*cos(phi)
+        imu.accel_ms2 = {0.0f, -9.80665f * std::sin(slope_rad), -9.80665f * std::cos(slope_rad)};
+        imu.gyro_rads = {0.0f, 0.0f, 0.0f};
+        imu.timestamp_us = now_us;
+        imu.healthy = true;
+
+        out = fc_pipe.step_1khz(imu, rc, 11.8f, now_us, dt, baro);
+    }
+
+    // Deve ter retornado para ARMED_IDLE (in_air = false) e nenhum motor pode ter disparado!
+    TEST_ASSERT_EQUAL(SystemState::ARMED_IDLE, out.telemetry.state);
+    for (int i = 0; i < 4; ++i) {
+        TEST_ASSERT_LESS_THAN_FLOAT(0.15f, out.motors.throttle[i]);
+    }
+}
+
 int main(int /*argc*/, char** /*argv*/) {
     UNITY_BEGIN();
     RUN_TEST(test_vertical_estimator_cancels_accel_bias_and_fuses_40hz_baro);
     RUN_TEST(test_closed_loop_6dof_alt_hold_with_banked_turn_and_battery_sag);
     RUN_TEST(test_closed_loop_6dof_baro_failsafe_flare_and_auto_touchdown_disarm);
+    RUN_TEST(test_bumpless_baro_loss_in_alt_hold_prevents_50pct_throttle_climb);
+    RUN_TEST(test_sloped_ground_landing_does_not_spool_motors_or_bounce);
     return UNITY_END();
 }

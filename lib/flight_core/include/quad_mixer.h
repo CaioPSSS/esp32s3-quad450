@@ -24,12 +24,19 @@ public:
                     float throttle_cmd,
                     const TorqueCommand& torque,
                     float tilt_cos,
-                    float vbat_measured_v) noexcept;
+                    float vbat_measured_v,
+                    bool allow_airmode = true) noexcept;
 
     bool was_saturated() const noexcept { return saturated_; }
 
     /**
-     * Converte valor normalizado [0.0 .. 1.0] em largura de pulso PWM (1000 .. 2000 µs).
+     * Converte valor normalizado [0.0 .. 1.0] em largura de pulso PWM em ponto flutuante
+     * (1000.0 .. 2000.0 µs) preservando 100% da resolução de 14 bits do LEDC (~0.15 µs).
+     */
+    static float to_pwm_us_f(float motor_norm, bool armed) noexcept;
+
+    /**
+     * Converte valor normalizado [0.0 .. 1.0] em largura de pulso PWM inteira (1000 .. 2000 µs).
      */
     static uint16_t to_pwm_us(float motor_norm, bool armed) noexcept;
 

@@ -21,11 +21,27 @@ uint32_t EscPwmDriver::pulse_us_to_duty_14bit(uint16_t pulse_us) noexcept {
     return (clamped_us * kPwmMaxCounts + (kPwmPeriodUs / 2u)) / kPwmPeriodUs;
 }
 
+uint32_t EscPwmDriver::pulse_us_f_to_duty_14bit(float pulse_us) noexcept {
+    if (!std::isfinite(pulse_us)) {
+        pulse_us = static_cast<float>(kMinPulseUs);
+    }
+    const float clamped_us = std::clamp(pulse_us, static_cast<float>(kMinPulseUs), static_cast<float>(kMaxPulseUs));
+    const float raw_duty = (clamped_us * static_cast<float>(kPwmMaxCounts)) / static_cast<float>(kPwmPeriodUs);
+    return static_cast<uint32_t>(std::lround(raw_duty));
+}
+
 void EscPwmDriver::write_channel_us(uint8_t idx, uint16_t pulse_us) noexcept {
+    write_channel_us_f(idx, static_cast<float>(pulse_us));
+}
+
+void EscPwmDriver::write_channel_us_f(uint8_t idx, float pulse_us) noexcept {
     if (!initialized_ || idx >= 4) return;
-    const uint16_t safe_us = static_cast<uint16_t>(std::clamp<uint16_t>(pulse_us, kMinPulseUs, kMaxPulseUs));
-    last_us_[idx] = safe_us;
-    const uint32_t duty = pulse_us_to_duty_14bit(safe_us);
+    if (!std::isfinite(pulse_us)) {
+        pulse_us = static_cast<float>(kMinPulseUs);
+    }
+    const float clamped_us = std::clamp(pulse_us, static_cast<float>(kMinPulseUs), static_cast<float>(kMaxPulseUs));
+    last_us_[idx] = static_cast<uint16_t>(std::lround(clamped_us));
+    const uint32_t duty = pulse_us_f_to_duty_14bit(clamped_us);
 
 #if defined(ESP_ARDUINO_VERSION) && (ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0))
     ledcWrite(pins_[idx], duty);
@@ -80,8 +96,8 @@ void EscPwmDriver::write_motors(const MotorOutput& out) noexcept {
             thr = 0.0f;
         }
         thr = std::clamp(thr, 0.0f, 1.0f);
-        const uint16_t pulse_us = static_cast<uint16_t>(std::lround(1000.0f + thr * 1000.0f));
-        write_channel_us(i, pulse_us);
+        const float pulse_us = 1000.0f + thr * 1000.0f;
+        write_channel_us_f(i, pulse_us);
     }
 }
 

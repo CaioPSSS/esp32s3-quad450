@@ -135,6 +135,8 @@ PipelineStepOutput FlightPipeline::step_1khz(const ImuSample& imu,
     sin.rc = rc;
     sin.tilt_cos = ahrs_.tilt_cos();
     sin.vbat_v = vbat_filt;
+    sin.gyro_norm_rads = gyro_filt.norm();
+    sin.abs_climb_rate_ms = std::fabs(vert_est_.climb_rate_ms());
     sin.baro_healthy = baro_ok;
     sin.touchdown_detected = alt_ctrl_.is_touchdown_detected();
     sin.allow_no_battery_bench = allow_no_bat_;
@@ -147,6 +149,7 @@ PipelineStepOutput FlightPipeline::step_1khz(const ImuSample& imu,
     TorqueCommand torque{};
     float effective_throttle = sdec.effective_rc.throttle;
     FlightMode reported_mode = sdec.effective_rc.mode;
+    bool allow_airmode = sdec.in_air;
 
     if (!sdec.motors_armed) {
         pid_.reset();
@@ -174,13 +177,37 @@ PipelineStepOutput FlightPipeline::step_1khz(const ImuSample& imu,
             effective_throttle = alt_ctrl_.update_alt_hold(
                 sdec.effective_rc.throttle, max_vz_ms, vert_est_, dt);
         } else {
-            // Em ARMED_IDLE no chão ou STABILIZE (ou fallback se Baro ausente)
+            // Em ARMED_IDLE no chão ou STABILIZE (ou fallback bumpless se Baro falhar em voo!)
             if (want_alt_hold && !baro_ok) {
                 reported_mode = FlightMode::STABILIZE;
+                if (sdec.in_air) {
+                    // Mapeia centro do stick [0.45..0.55] p/ hover_throttle aprendido (~0.36),
+                    // eliminando salto brusco de subida caso o fio I2C do BMP280 falhe em ALT_HOLD!
+                    const float hover_ref = alt_ctrl_.learned_hover_throttle();
+                    const float stick = std::clamp(effective_throttle, 0.0f, 1.0f);
+                    if (stick > 0.55f) {
+                        effective_throttle = hover_ref + ((stick - 0.55f) / 0.45f) * (0.90f - hover_ref);
+                    } else if (stick < 0.45f) {
+                        effective_throttle = params_.motor_idle + (stick / 0.45f) * (hover_ref - params_.motor_idle);
+                    } else {
+                        effective_throttle = hover_ref;
+                    }
+                }
+            } else {
+                alt_ctrl_.observe_manual_flight(
+                    effective_throttle, sdec.in_air, ahrs_.tilt_cos(), vert_est_, dt);
             }
-            alt_ctrl_.observe_manual_flight(
-                effective_throttle, sdec.in_air, ahrs_.tilt_cos(), vert_est_, dt);
         }
+
+        const bool low_stick_landing = (!want_alt_hold || !baro_ok) &&
+                                       (sdec.state == SystemState::FLYING) &&
+                                       (sdec.effective_rc.throttle <= params_.motor_idle + 0.02f);
+        const bool touchdown_unload = (sdec.state == SystemState::FAILSAFE_DESCEND ||
+                                       (want_alt_hold && sdec.effective_rc.throttle <= 0.05f)) &&
+                                      (effective_throttle <= alt_ctrl_.learned_hover_throttle() * 0.90f);
+
+        allow_airmode = sdec.in_air && !low_stick_landing && !touchdown_unload;
+        const bool bleed_pid_i = low_stick_landing || touchdown_unload;
 
         const float mode_tilt_deg = cine_gentle_mode
                                         ? std::min(params_.max_tilt_deg, 20.0f)
@@ -199,7 +226,8 @@ PipelineStepOutput FlightPipeline::step_1khz(const ImuSample& imu,
                                        gyro_filt,
                                        dt,
                                        sdec.in_air,
-                                       mixer_.was_saturated());
+                                       mixer_.was_saturated(),
+                                       bleed_pid_i);
     }
 
     out.motors = mixer_.mix(sdec.motors_armed,
@@ -207,7 +235,8 @@ PipelineStepOutput FlightPipeline::step_1khz(const ImuSample& imu,
                             effective_throttle,
                             torque,
                             ahrs_.tilt_cos(),
-                            vbat_filt);
+                            vbat_filt,
+                            allow_airmode);
 
     // 6. Preenche Snapshot de Telemetria (Core 0 / MAVLink / OLED)
     out.telemetry.state = sdec.state;

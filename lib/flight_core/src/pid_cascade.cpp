@@ -46,7 +46,8 @@ float RateAxisPID::update(float rate_setpoint_rads,
                           float gyro_measured_rads,
                           float dt_s,
                           bool allow_integration,
-                          bool mixer_saturated) noexcept {
+                          bool mixer_saturated,
+                          bool bleed_integration) noexcept {
     if (!std::isfinite(rate_setpoint_rads) || !std::isfinite(gyro_measured_rads) ||
         !std::isfinite(dt_s) || dt_s < kMinDtSeconds) {
         return 0.0f;
@@ -69,9 +70,11 @@ float RateAxisPID::update(float rate_setpoint_rads,
     const float filt_gyro_deriv = d_lpf_.apply(raw_gyro_deriv);
     last_d_ = -kd_ * filt_gyro_deriv;
 
-    // Anti-windup condicional + zeramento em solo
+    // Anti-windup condicional + zeramento em solo + descarga suave no pouso c/ stick a zero
     if (!allow_integration || ki_ <= 0.0f) {
         integral_ = 0.0f;
+    } else if (bleed_integration) {
+        integral_ *= std::max(0.0f, 1.0f - 8.0f * dt);
     } else {
         const float pre_out = last_p_ + integral_ + last_d_;
         const bool pushing_further_into_sat =
@@ -127,7 +130,8 @@ TorqueCommand CascadedPID::update_stabilize(float roll_sp_rad,
                                             const Vec3f& gyro_filt_rads,
                                             float dt_s,
                                             bool in_air,
-                                            bool mixer_saturated) noexcept {
+                                            bool mixer_saturated,
+                                            bool bleed_integration) noexcept {
     const float clamped_roll_sp  = std::clamp(roll_sp_rad,  -max_tilt_rad_, max_tilt_rad_);
     const float clamped_pitch_sp = std::clamp(pitch_sp_rad, -max_tilt_rad_, max_tilt_rad_);
     const float clamped_yaw_rate = std::clamp(yaw_rate_sp_rads, -max_rate_yaw_rads_, max_rate_yaw_rads_);
@@ -143,9 +147,9 @@ TorqueCommand CascadedPID::update_stabilize(float roll_sp_rad,
 
     // Malha interna PID (Velocidade Angular -> Momento Normalizado FRD)
     TorqueCommand out{};
-    out.roll  = roll_pid_.update(roll_rate_sp,  gyro_filt_rads.x, dt_s, in_air, mixer_saturated);
-    out.pitch = pitch_pid_.update(pitch_rate_sp, gyro_filt_rads.y, dt_s, in_air, mixer_saturated);
-    out.yaw   = yaw_pid_.update(clamped_yaw_rate, gyro_filt_rads.z, dt_s, in_air, mixer_saturated);
+    out.roll  = roll_pid_.update(roll_rate_sp,     gyro_filt_rads.x, dt_s, in_air, mixer_saturated, bleed_integration);
+    out.pitch = pitch_pid_.update(pitch_rate_sp,   gyro_filt_rads.y, dt_s, in_air, mixer_saturated, bleed_integration);
+    out.yaw   = yaw_pid_.update(clamped_yaw_rate, gyro_filt_rads.z, dt_s, in_air, mixer_saturated, bleed_integration);
     return out;
 }
 

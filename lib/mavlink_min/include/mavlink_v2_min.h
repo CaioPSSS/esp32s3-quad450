@@ -38,6 +38,7 @@ constexpr uint8_t MAV_SEVERITY_INFO     = 6;
 
 constexpr uint16_t MAV_CMD_NAV_RETURN_TO_LAUNCH  = 20;
 constexpr uint16_t MAV_CMD_PREFLIGHT_CALIBRATION = 241;
+constexpr uint16_t MAV_CMD_PREFLIGHT_STORAGE     = 245;
 constexpr uint16_t MAV_CMD_COMPONENT_ARM_DISARM  = 400;
 
 constexpr uint8_t MAV_RESULT_ACCEPTED = 0;

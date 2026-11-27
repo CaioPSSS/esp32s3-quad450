@@ -20,6 +20,8 @@ struct SafetyConfig {
     float failsafe_min_thr        = 0.20f;  // Piso da rampa de descida cega antes de cortar
     float failsafe_max_descend_s  = 6.0f;   // Duração máx de descida cega (sem baro) antes de Estágio 2
     float failsafe_max_baro_descend_s = 45.0f; // Teto seguro p/ descida controlada c/ barômetro (~25m AGL)
+    float ground_return_s         = 1.0f;   // Tempo pousado c/ stick no zero p/ voltar FLYING -> ARMED_IDLE
+    uint8_t failsafe_recovery_packets = 3u; // Pacotes frescos consecutivos p/ sair de FAILSAFE_DESCEND -> FLYING
 };
 
 struct SafetyInputs {
@@ -30,6 +32,8 @@ struct SafetyInputs {
     RcCommand rc{};
     float tilt_cos            = 1.0f;
     float vbat_v              = 0.0f;
+    float gyro_norm_rads      = 0.0f; // Norma da velocidade angular p/ detectar repouso no solo
+    float abs_climb_rate_ms   = 0.0f; // |Vz| estimado p/ confirmar toque estacionário no pouso manual
     bool baro_healthy         = false; // Se true, usa descida controlada por velocidade + detector de pouso
     bool touchdown_detected   = false; // Acionado pelo AltHoldController ao detectar toque firme na grama
     bool allow_no_battery_bench = false;
@@ -77,6 +81,9 @@ private:
     bool observed_switch_disarmed_ = false;
     bool prev_arm_switch_ = false;
     float state_elapsed_s_ = 0.0f;
+    float landed_idle_timer_s_ = 0.0f;
+    uint32_t last_seen_rc_us_ = 0;
+    uint8_t fs_recovery_pkt_cnt_ = 0;
 };
 
 } // namespace fc

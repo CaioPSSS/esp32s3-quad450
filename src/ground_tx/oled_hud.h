@@ -16,6 +16,7 @@ struct HudDisplayData {
     proto::TelemFastPkt telem{};
     NormalizedSticks sticks{};
     bool     arm_switch_on = false;
+    bool     nvs_save_toast = false;
     uint8_t  cal_wizard_step = 0; // 0=normal, 1=movendo extremos, 2=centrando
 };
 

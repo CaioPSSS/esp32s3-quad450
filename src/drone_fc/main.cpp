@@ -30,24 +30,25 @@ namespace {
 // ============================================================================
 // Pinagem Oficial da Placa Controladora 7x9 cm (ESP32-S3-DevKitC-1 N16R8)
 // ============================================================================
-constexpr int kPinAdcVbat   = 1;  // Divisor 33k / 10k (fator 4.30x)
+constexpr int kPinAdcVbat   = 1;  // Divisor 39k / 10k (fator 4.90x -> 2.57V @ 12.6V <= 2.90V ADC1!)
 constexpr int kPinEscM1Fr   = 4;  // Motor 1 Frente-Direita (CCW)
 constexpr int kPinEscM2Rr   = 5;  // Motor 2 Traseira-Direita (CW)
 constexpr int kPinEscM3Rl   = 6;  // Motor 3 Traseira-Esquerda (CCW)
 constexpr int kPinEscM4Fl   = 7;  // Motor 4 Frente-Esquerda (CW)
-constexpr int kPinI2cSda    = 8;  // BMP280 + futuro QMC5883L
+constexpr int kPinI2cSda    = 8;  // BMP280 + futuro QMC5883L (ISRs alocadas no Core 0!)
 constexpr int kPinI2cScl    = 9;
 constexpr int kPinImuCs     = 10; // SPI FSPI 10 MHz -> ICM-42688-P
 constexpr int kPinImuMosi   = 11;
 constexpr int kPinImuSck    = 12;
 constexpr int kPinImuMiso   = 13;
 constexpr int kPinImuInt1   = 14; // Pulso Data-Ready 1000 Hz -> ISR em IRAM
-constexpr int kPinBuzzer    = 21; // Buzzer ativo 5V via +5V_SYS
-constexpr int kPinRgbLed    = 48; // LED RGB onboard do ESP32-S3-DevKitC-1
+constexpr int kPinBuzzer    = 21; // Buzzer ativo 5V NPN Active-HIGH (ex.: KY-012) via +5V_SYS
+constexpr int kPinRgbLedV11 = 38; // LED RGB onboard do ESP32-S3-DevKitC-1 v1.1
+constexpr int kPinRgbLedV10 = 48; // LED RGB onboard do ESP32-S3-DevKitC-1 v1.0 / YD-ESP32-S3
 
-constexpr float   kVbatDividerScale = (33.0f + 10.0f) / 10.0f; // 4.30x
+constexpr float   kVbatDividerScale = (39.0f + 10.0f) / 10.0f; // 4.90x (39k / 10k)
 constexpr uint8_t kWifiLrChannel    = 1;
-constexpr uint32_t kNvsParamMagic   = 0x51343531u; // "Q451" (19 params c/ AltHold)
+constexpr uint32_t kNvsParamMagic   = 0x51343532u; // "Q452" (19 params c/ filtros v2.1)
 
 // Periféricos e Módulos Globais
 SPIClass         g_imu_spi(FSPI);
@@ -61,6 +62,7 @@ Preferences      g_prefs;
 FlightPipeline   g_pipeline;
 
 TaskHandle_t      g_flight_task_handle = nullptr;
+TaskHandle_t      g_comms_task_handle  = nullptr;
 volatile uint32_t g_int1_edge_total    = 0;
 volatile uint16_t g_measured_int1_hz   = 0;
 
@@ -69,7 +71,6 @@ volatile uint16_t g_measured_int1_hz   = 0;
 // ============================================================================
 struct BaroNavShared {
     BaroSample baro{};
-    float climb_rate_ms = 0.0f;
 };
 
 struct Core1OutShared {
@@ -136,7 +137,7 @@ void load_nvs_settings() {
         NvsStoredBlob blob{};
         if (g_prefs.getBytes("cfg", &blob, sizeof(blob)) == sizeof(blob) &&
             blob.magic == kNvsParamMagic) {
-            // Revalida faixas seguras de todos os 15 parâmetros ao carregar da Flash
+            // Revalida faixas seguras de todos os 19 parâmetros ao carregar da Flash
             FlightParams clean{};
             for (uint8_t i = 0; i < PARAM_COUNT; ++i) {
                 float v = 0.0f;
@@ -154,6 +155,12 @@ void load_nvs_settings() {
 }
 
 bool save_nvs_settings() {
+    // Bloqueio crítico de segurança: gravação na Flash SPI suspende o cache XIP por 25..60 ms!
+    // Jamais permitir escrita em NVS com motores armados.
+    if (g_core1_out_lock.read().telem.motors.armed) {
+        return false;
+    }
+
     NvsStoredBlob blob{};
     blob.magic = kNvsParamMagic;
     blob.imu_rot = static_cast<uint8_t>(g_shadow_imu_rot);
@@ -283,7 +290,7 @@ void flight_control_task(void* /*arg*/) {
         // 4. Executa 1 passo determinístico de 1000 Hz do `flight_core` (c/ Fusão Vertical + AltHold!)
         PipelineStepOutput step_out = g_pipeline.step_1khz(imu, rc, vbat_v, now_us, dt_s, baro_nav.baro);
 
-        // 5. Acionamento seguro dos 4 ESCs (400 Hz 14-bit LEDC)
+        // 5. Acionamento seguro dos 4 ESCs (400 Hz 14-bit LEDC — 6553 degraus finos de 0.15 µs)
         if (step_out.telemetry.state == SystemState::BENCH_DIAGNOSTIC) {
             const BenchMotorOverride ovr = g_bench_ovr_lock.read();
             const uint32_t now_ms = millis();
@@ -360,7 +367,7 @@ bool cli_set_bench_mode(bool active) {
     req.change_bench = true;
     req.bench_enable = active;
     push_core1_request(req);
-    delay(5);
+    vTaskDelay(pdMS_TO_TICKS(5));
     return (g_core1_out_lock.read().telem.state == SystemState::BENCH_DIAGNOSTIC) == active;
 }
 
@@ -381,7 +388,7 @@ bool cli_set_imu_rotation(ImuMountRotation rot) {
     const Core1OutShared c1 = g_core1_out_lock.read();
     if (c1.telem.motors.armed) return false;
     g_shadow_imu_rot = rot;
-    (void)save_nvs_settings();
+    if (!save_nvs_settings()) return false;
 
     Core0ToCore1Req req{};
     req.change_imu_rot = true;
@@ -417,7 +424,7 @@ bool cli_reset_params_nvs() {
     const Core1OutShared c1 = g_core1_out_lock.read();
     if (c1.telem.motors.armed) return false;
     g_shadow_params = FlightParams{};
-    (void)save_nvs_settings();
+    if (!save_nvs_settings()) return false;
 
     Core0ToCore1Req req{};
     req.apply_params = true;
@@ -427,7 +434,7 @@ bool cli_reset_params_nvs() {
 }
 
 // ============================================================================
-// Leitura 8x Oversampled do Divisor VBAT 3S (GPIO1: 33k / 10k)
+// Leitura 8x Oversampled do Divisor VBAT 3S (GPIO1: 39k / 10k -> 4.90x)
 // ============================================================================
 float read_vbat_volts() {
     uint32_t mv_sum = 0;
@@ -465,10 +472,157 @@ void update_status_rgb(SystemState st, uint16_t prearm_flags, uint32_t now_ms) {
             r = blink ? 40 : 0; g = 0; b = blink ? 35 : 0; // Roxo piscando: Failsafe!
             break;
     }
-    rgbLedWrite(kPinRgbLed, r, g, b);
+
+    // Só aciona o periférico RMT quando a cor de fato muda (0 Hz em voo estável!),
+    // acionando GPIO48 (DevKitC-1 v1.0 / YD) e GPIO38 (DevKitC-1 v1.1).
+    static uint8_t prev_r = 0xFF, prev_g = 0xFF, prev_b = 0xFF;
+    if (r != prev_r || g != prev_g || b != prev_b) {
+        prev_r = r;
+        prev_g = g;
+        prev_b = b;
+        rgbLedWrite(kPinRgbLedV10, r, g, b);
+        rgbLedWrite(kPinRgbLedV11, r, g, b);
+    }
 #else
     (void)st; (void)prearm_flags; (void)now_ms;
 #endif
+}
+
+// ============================================================================
+// CORE 0: Task Dedicada de Comunicações, Barômetro I2C, VBAT, LED/Buzzer e CLI
+// (Garante que a ISR de hardware do Wire I2C e o RMT do LED fiquem no Core 0!)
+// ============================================================================
+void core0_comms_task(void* /*arg*/) {
+    // Inicializa o barramento I2C dentro da task fixada no Core 0 para alocar sua ISR na CPU 0!
+    g_baro.begin(Wire, kPinI2cSda, kPinI2cScl);
+
+    uint32_t last_vbat_ms    = 0;
+    uint32_t last_baro_ms    = 0;
+    uint32_t last_telem_ms   = 0;
+    uint32_t last_hz_meas_ms = 0;
+    uint32_t prev_int1_edges = 0;
+    uint32_t seen_param_pkt  = 0;
+    uint16_t telem_seq       = 0;
+    bool     was_calibrating = true;
+    uint32_t cal_done_beep_until_ms = 0;
+
+    for (;;) {
+        const uint32_t now_ms = millis();
+        const uint32_t now_us = static_cast<uint32_t>(esp_timer_get_time());
+
+        // 1. Mede taxa real de pulsos INT1 a cada 1.0 segundo
+        if (now_ms - last_hz_meas_ms >= 1000u) {
+            last_hz_meas_ms = now_ms;
+            const uint32_t cur_edges = g_int1_edge_total;
+            g_measured_int1_hz = static_cast<uint16_t>(std::min<uint32_t>(cur_edges - prev_int1_edges, 65535u));
+            prev_int1_edges = cur_edges;
+        }
+
+        // 2. Amostra tensão da bateria LiPo 3S a 50 Hz (20 ms)
+        if (now_ms - last_vbat_ms >= 20u) {
+            last_vbat_ms = now_ms;
+            g_vbat_lock.write(read_vbat_volts());
+        }
+
+        // 3. Amostra barômetro BMP280 I2C a 40 Hz (25 ms) exclusivamente no Core 0
+        if (now_ms - last_baro_ms >= 25u) {
+            last_baro_ms = now_ms;
+            BaroSample b{};
+            if (g_baro.poll(now_us, b)) {
+                BaroNavShared bn{b};
+                g_baro_lock.write(bn);
+            }
+        }
+
+        // 4. Processa comandos remotos de parâmetros vindos do QGroundControl via `ground_tx`
+        const uint32_t cur_p_cnt = g_rx_param_pkt_cnt;
+        if (cur_p_cnt != seen_param_pkt) {
+            seen_param_pkt = cur_p_cnt;
+            const ParamSyncPkt req = g_rx_param_pkt_lock.read();
+
+            ParamSyncPkt ack{};
+            ack.type      = PKT_PARAM_SYNC;
+            ack.req_id    = req.req_id;
+            ack.op        = PARAM_OP_ACK;
+            ack.param_idx = req.param_idx;
+            ack.status    = 1; // 0 = OK, 1 = Erro/Bloqueado
+
+            if (req.op == PARAM_OP_GET) {
+                float v = 0.0f;
+                if (get_param_by_index(g_shadow_params, req.param_idx, v)) {
+                    ack.value = v;
+                    ack.status = 0;
+                }
+            } else if (req.op == PARAM_OP_SET) {
+                if (cli_set_param(req.param_idx, req.value)) {
+                    (void)get_param_by_index(g_shadow_params, req.param_idx, ack.value);
+                    ack.status = 0;
+                }
+            } else if (req.op == PARAM_OP_SAVE_NVS) {
+                ack.op = PARAM_OP_SAVE_NVS;
+                if (save_nvs_settings()) {
+                    ack.status = 0;
+                }
+            }
+
+            seal_packet(ack);
+            (void)g_radio.send(&ack, sizeof(ack));
+        }
+
+        // 5. Envia Telemetria Rápida (34 bytes) a 20 Hz (50 ms) para o Controle Caseiro + QGC
+        const Core1OutShared c1 = g_core1_out_lock.read();
+        if (now_ms - last_telem_ms >= 50u && g_radio.has_bound_peer()) {
+            last_telem_ms = now_ms;
+
+            auto clamp_i16 = [](float v) -> int16_t {
+                return static_cast<int16_t>(std::clamp(std::lround(v), -32767L, 32767L));
+            };
+
+            TelemFastPkt tpkt{};
+            tpkt.type          = PKT_TELEM_FAST;
+            tpkt.seq           = telem_seq++;
+            tpkt.state         = static_cast<uint8_t>(c1.telem.state);
+            tpkt.flight_mode   = static_cast<uint8_t>(c1.telem.mode);
+            tpkt.prearm_flags  = c1.telem.prearm_flags;
+            tpkt.roll_deg10    = clamp_i16(c1.telem.attitude.roll_deg() * 10.0f);
+            tpkt.pitch_deg10   = clamp_i16(c1.telem.attitude.pitch_deg() * 10.0f);
+            tpkt.yaw_deg10     = clamp_i16(c1.telem.attitude.yaw_deg() * 10.0f);
+            tpkt.alt_cm        = static_cast<int32_t>(std::lround(c1.telem.altitude_m * 100.0f));
+            tpkt.vz_cms        = clamp_i16(c1.telem.climb_rate_ms * 100.0f);
+            tpkt.vbat_mv       = static_cast<uint16_t>(std::clamp(std::lround(c1.telem.vbat_v * 1000.0f), 0L, 65535L));
+            for (int i = 0; i < 4; ++i) {
+                tpkt.motor_pct[i] = static_cast<uint8_t>(std::clamp(std::lround(c1.telem.motors.throttle[i] * 100.0f), 0L, 100L));
+            }
+            tpkt.drone_rssi_dbm = g_radio.last_rssi_dbm();
+            tpkt.cpu_load_pct   = c1.telem.cpu_load_pct;
+            tpkt.loop_dt_us     = c1.telem.loop_dt_us;
+            tpkt.ack_seq        = g_last_rc_seq;
+            seal_packet(tpkt);
+            (void)g_radio.send(&tpkt, sizeof(tpkt));
+        }
+
+        // 6. Buzzer NPN Active-HIGH (GPIO21) + LED RGB (GPIO48 v1.0 / GPIO38 v1.1)
+        if (was_calibrating && c1.telem.state != SystemState::BOOT_CALIBRATING) {
+            was_calibrating = false;
+            cal_done_beep_until_ms = now_ms + 180u;
+        }
+
+        const bool low_bat_flight = c1.telem.motors.armed && (c1.telem.vbat_v > 5.0f && c1.telem.vbat_v < 10.5f);
+        if (now_ms < cal_done_beep_until_ms) {
+            digitalWrite(kPinBuzzer, HIGH);
+        } else if (c1.buzzer_siren || low_bat_flight) {
+            digitalWrite(kPinBuzzer, ((now_ms / 150u) & 1u) ? HIGH : LOW);
+        } else {
+            digitalWrite(kPinBuzzer, LOW);
+        }
+
+        update_status_rgb(c1.telem.state, c1.telem.prearm_flags, now_ms);
+
+        // 7. Console Interativo USB-C de Bancada
+        g_cli.update(now_ms);
+
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
 }
 
 } // namespace
@@ -483,6 +637,7 @@ void setup() {
     digitalWrite(kPinBuzzer, LOW);
 
     Serial.begin(115200);
+    Serial.setTxTimeoutMs(10); // Evita travamento de 2000 ms caso USB-CDC não esteja aberta no host
 
     analogReadResolution(12);
     analogSetAttenuation(ADC_11db);
@@ -495,13 +650,11 @@ void setup() {
     // 3. Aloca Caixa-Preta de 6.5 MB na Octal PSRAM
     g_blackbox.begin(2); // 500 Hz
 
-    // 4. Inicializa sensores (BMP280 I2C 400 kHz no Core 0 + ICM-42688-P SPI 10 MHz)
-    g_baro.begin(Wire, kPinI2cSda, kPinI2cScl);
-
+    // 4. Inicializa IMU primária ICM-42688-P em SPI FSPI 10 MHz
     ImuSpiPins imu_pins{kPinImuCs, kPinImuMosi, kPinImuSck, kPinImuMiso, kPinImuInt1};
     g_imu.begin(g_imu_spi, imu_pins, g_shadow_imu_rot);
 
-    // 5. Inicializa Rádio ESP-NOW Long Range (`WIFI_PROTOCOL_LR` @ 19.5 dBm)
+    // 5. Inicializa Rádio ESP-NOW Long Range puro (`WIFI_PHY_RATE_LORA_250K` @ 19.5 dBm)
     g_radio.set_rx_callback(&on_espnow_rx);
     g_radio.begin(kWifiLrChannel, true);
 
@@ -519,7 +672,17 @@ void setup() {
     hooks.reset_params_nvs   = &cli_reset_params_nvs;
     g_cli.begin(Serial, &g_blackbox, hooks);
 
-    // 7. Lança `FlightControlTask` isolada no Core 1 com prioridade máxima e engata ISR em GPIO14
+    // 7. Lança `CommsCore0` explicitamente no Core 0 (onde Wire I2C, RMT RGB e CLI rodam)
+    xTaskCreatePinnedToCore(
+        &core0_comms_task,
+        "CommsCore0",
+        8192,
+        nullptr,
+        3,
+        &g_comms_task_handle,
+        0);
+
+    // 8. Lança `FlightControlTask` isolada no Core 1 com prioridade máxima e engata ISR em GPIO14
     xTaskCreatePinnedToCore(
         &flight_control_task,
         "Flight1kHz",
@@ -539,145 +702,7 @@ void setup() {
 }
 
 void loop() {
-    // ========================================================================
-    // CORE 0: Barômetro (40 Hz), VBAT (50 Hz), Telemetria ESP-NOW (20 Hz),
-    //         Sincronização de Parâmetros NVS, Buzzer/LED e Bench CLI USB
-    // ========================================================================
-    const uint32_t now_ms = millis();
-    const uint32_t now_us = static_cast<uint32_t>(esp_timer_get_time());
-
-    static uint32_t last_vbat_ms    = 0;
-    static uint32_t last_baro_ms    = 0;
-    static uint32_t last_telem_ms   = 0;
-    static uint32_t last_hz_meas_ms = 0;
-    static uint32_t prev_int1_edges = 0;
-    static uint32_t seen_param_pkt  = 0;
-    static uint16_t telem_seq       = 0;
-    static float    prev_baro_alt_m = 0.0f;
-    static uint32_t prev_baro_us    = 0;
-    static float    climb_rate_lpf  = 0.0f;
-    static bool     was_calibrating = true;
-
-    // 1. Mede taxa real de pulsos INT1 a cada 1.0 segundo
-    if (now_ms - last_hz_meas_ms >= 1000u) {
-        last_hz_meas_ms = now_ms;
-        const uint32_t cur_edges = g_int1_edge_total;
-        g_measured_int1_hz = static_cast<uint16_t>(std::min<uint32_t>(cur_edges - prev_int1_edges, 65535u));
-        prev_int1_edges = cur_edges;
-    }
-
-    // 2. Amostra tensão da bateria LiPo 3S a 50 Hz (20 ms)
-    if (now_ms - last_vbat_ms >= 20u) {
-        last_vbat_ms = now_ms;
-        g_vbat_lock.write(read_vbat_volts());
-    }
-
-    // 3. Amostra barômetro BMP280 I2C a 40 Hz (25 ms) sem bloquear o Core 1
-    if (now_ms - last_baro_ms >= 25u) {
-        last_baro_ms = now_ms;
-        BaroSample b{};
-        if (g_baro.poll(now_us, b)) {
-            if (prev_baro_us != 0 && b.timestamp_us > prev_baro_us) {
-                const float dt_b = static_cast<float>(b.timestamp_us - prev_baro_us) * 1.0e-6f;
-                if (dt_b > 0.005f && dt_b < 0.5f) {
-                    const float raw_vz = (b.altitude_m - prev_baro_alt_m) / dt_b;
-                    climb_rate_lpf = 0.80f * climb_rate_lpf + 0.20f * raw_vz;
-                }
-            }
-            prev_baro_alt_m = b.altitude_m;
-            prev_baro_us = b.timestamp_us;
-
-            BaroNavShared bn{b, climb_rate_lpf};
-            g_baro_lock.write(bn);
-        }
-    }
-
-    // 4. Processa comandos remotos de parâmetros vindos do QGroundControl via `ground_tx`
-    const uint32_t cur_p_cnt = g_rx_param_pkt_cnt;
-    if (cur_p_cnt != seen_param_pkt) {
-        seen_param_pkt = cur_p_cnt;
-        const ParamSyncPkt req = g_rx_param_pkt_lock.read();
-
-        ParamSyncPkt ack{};
-        ack.type      = PKT_PARAM_SYNC;
-        ack.req_id    = req.req_id;
-        ack.op        = PARAM_OP_ACK;
-        ack.param_idx = req.param_idx;
-        ack.status    = 1; // 0 = OK, 1 = Erro
-
-        if (req.op == PARAM_OP_GET) {
-            float v = 0.0f;
-            if (get_param_by_index(g_shadow_params, req.param_idx, v)) {
-                ack.value = v;
-                ack.status = 0;
-            }
-        } else if (req.op == PARAM_OP_SET) {
-            if (cli_set_param(req.param_idx, req.value)) {
-                (void)get_param_by_index(g_shadow_params, req.param_idx, ack.value);
-                ack.status = 0;
-            }
-        } else if (req.op == PARAM_OP_SAVE_NVS) {
-            if (save_nvs_settings()) {
-                ack.status = 0;
-            }
-        }
-
-        seal_packet(ack);
-        (void)g_radio.send(&ack, sizeof(ack));
-    }
-
-    // 5. Envia Telemetria Rápida (34 bytes) a 20 Hz (50 ms) para o Controle Caseiro + QGC
-    const Core1OutShared c1 = g_core1_out_lock.read();
-    if (now_ms - last_telem_ms >= 50u && g_radio.has_bound_peer()) {
-        last_telem_ms = now_ms;
-
-        auto clamp_i16 = [](float v) -> int16_t {
-            return static_cast<int16_t>(std::clamp(std::lround(v), -32767L, 32767L));
-        };
-
-        TelemFastPkt tpkt{};
-        tpkt.type          = PKT_TELEM_FAST;
-        tpkt.seq           = telem_seq++;
-        tpkt.state         = static_cast<uint8_t>(c1.telem.state);
-        tpkt.flight_mode   = static_cast<uint8_t>(c1.telem.mode);
-        tpkt.prearm_flags  = c1.telem.prearm_flags;
-        tpkt.roll_deg10    = clamp_i16(c1.telem.attitude.roll_deg() * 10.0f);
-        tpkt.pitch_deg10   = clamp_i16(c1.telem.attitude.pitch_deg() * 10.0f);
-        tpkt.yaw_deg10     = clamp_i16(c1.telem.attitude.yaw_deg() * 10.0f);
-        tpkt.alt_cm        = static_cast<int32_t>(std::lround(c1.telem.altitude_m * 100.0f));
-        tpkt.vz_cms        = clamp_i16(c1.telem.climb_rate_ms * 100.0f);
-        tpkt.vbat_mv       = static_cast<uint16_t>(std::clamp(std::lround(c1.telem.vbat_v * 1000.0f), 0L, 65535L));
-        for (int i = 0; i < 4; ++i) {
-            tpkt.motor_pct[i] = static_cast<uint8_t>(std::clamp(std::lround(c1.telem.motors.throttle[i] * 100.0f), 0L, 100L));
-        }
-        tpkt.drone_rssi_dbm = g_radio.last_rssi_dbm();
-        tpkt.cpu_load_pct   = c1.telem.cpu_load_pct;
-        tpkt.loop_dt_us     = c1.telem.loop_dt_us;
-        tpkt.ack_seq        = g_last_rc_seq;
-        seal_packet(tpkt);
-        (void)g_radio.send(&tpkt, sizeof(tpkt));
-    }
-
-    // 6. Buzzer (GPIO21) + LED RGB (GPIO48)
-    static uint32_t cal_done_beep_until_ms = 0;
-    if (was_calibrating && c1.telem.state != SystemState::BOOT_CALIBRATING) {
-        was_calibrating = false;
-        cal_done_beep_until_ms = now_ms + 180u;
-    }
-
-    const bool low_bat_flight = c1.telem.motors.armed && (c1.telem.vbat_v > 5.0f && c1.telem.vbat_v < 10.5f);
-    if (now_ms < cal_done_beep_until_ms) {
-        digitalWrite(kPinBuzzer, HIGH);
-    } else if (c1.buzzer_siren || low_bat_flight) {
-        digitalWrite(kPinBuzzer, ((now_ms / 150u) & 1u) ? HIGH : LOW);
-    } else {
-        digitalWrite(kPinBuzzer, LOW);
-    }
-
-    update_status_rgb(c1.telem.state, c1.telem.prearm_flags, now_ms);
-
-    // 7. Console Interativo USB-C de Bancada
-    g_cli.update(now_ms);
-
-    delay(2);
+    // No Arduino-ESP32 (`CONFIG_ARDUINO_RUNNING_CORE = 1`), `loopTask` roda no Core 1.
+    // Mantemos `loop()` adormecida para reservar 100% do Core 1 à malha determinística `Flight1kHz`!
+    vTaskDelay(pdMS_TO_TICKS(1000));
 }

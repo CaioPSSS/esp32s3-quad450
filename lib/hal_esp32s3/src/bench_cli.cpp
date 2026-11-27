@@ -291,6 +291,8 @@ void BenchCli::handle_line(char* line, uint32_t now_ms) noexcept {
     } else if (std::strcmp(cmd, "save") == 0) {
         if (hooks_.save_params_nvs && hooks_.save_params_nvs()) {
             serial_->println("[OK] Parametros gravados permanentemente na Flash NVS!");
+        } else {
+            serial_->println("[ERRO] Desarme o drone antes de gravar na Flash NVS (evita congelamento XIP)!");
         }
     } else if (std::strcmp(cmd, "nvs_reset") == 0) {
         if (hooks_.reset_params_nvs && hooks_.reset_params_nvs()) {

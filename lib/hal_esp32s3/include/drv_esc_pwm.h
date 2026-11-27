@@ -53,9 +53,11 @@ public:
     }
 
     static uint32_t pulse_us_to_duty_14bit(uint16_t pulse_us) noexcept;
+    static uint32_t pulse_us_f_to_duty_14bit(float pulse_us) noexcept;
 
 private:
     void write_channel_us(uint8_t idx, uint16_t pulse_us) noexcept;
+    void write_channel_us_f(uint8_t idx, float pulse_us) noexcept;
 
     int pins_[4] = {4, 5, 6, 7};
     uint16_t last_us_[4] = {1000, 1000, 1000, 1000};

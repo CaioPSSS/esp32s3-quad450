@@ -243,10 +243,21 @@ void test_two_stage_failsafe_recovery_and_crash_flip_cutoff() {
     TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, dec.effective_rc.roll);  // Nivela Roll=0!
     TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.0f, dec.effective_rc.pitch); // Nivela Pitch=0!
 
-    // Pacote ESP-NOW volta após 0.8 s -> recupera voo normal sem cair!
+    // 1 único pacote fantasma após 0.8 s NÃO pode abortar prematuramente o FAILSAFE_DESCEND!
     t += 800000u;
     in.now_us = in.last_imu_us = in.rc.timestamp_us = t;
     dec = fsm.update(in, 0.80f);
+    TEST_ASSERT_EQUAL(SystemState::FAILSAFE_DESCEND, dec.state);
+
+    // Após 3 pacotes consecutivos frescos (espaçados por 10 ms <= 150 ms), recupera voo normal!
+    t += 10000u;
+    in.now_us = in.last_imu_us = in.rc.timestamp_us = t;
+    dec = fsm.update(in, 0.01f);
+    TEST_ASSERT_EQUAL(SystemState::FAILSAFE_DESCEND, dec.state);
+
+    t += 10000u;
+    in.now_us = in.last_imu_us = in.rc.timestamp_us = t;
+    dec = fsm.update(in, 0.01f);
     TEST_ASSERT_EQUAL(SystemState::FLYING, dec.state);
     TEST_ASSERT_FALSE(dec.buzzer_siren);
 
@@ -275,6 +286,81 @@ void test_two_stage_failsafe_recovery_and_crash_flip_cutoff() {
     TEST_ASSERT_EQUAL(SystemState::DISARMED, dec.state);
 }
 
+// =============================================================================
+// 7. KILL-SWITCH SOBERANO: 1 ÚNICO PACOTE COM ARM=OFF DESARMA EM FAILSAFE!
+// =============================================================================
+void test_failsafe_kill_switch_disarms_on_single_packet() {
+    SafetyStateMachine fsm;
+    uint32_t t = 1000000u;
+    SafetyInputs in = make_healthy_disarmed_inputs(t);
+
+    (void)fsm.update(in, 0.001f);
+    t += 1000u; in.now_us = in.last_imu_us = in.rc.timestamp_us = t;
+    in.rc.arm_switch = true;
+    (void)fsm.update(in, 0.001f);
+    t += 1000u; in.now_us = in.last_imu_us = in.rc.timestamp_us = t;
+    in.rc.throttle = 0.50f;
+    (void)fsm.update(in, 0.001f);
+
+    // Entra em FAILSAFE_DESCEND por perda de link
+    t += 400000u;
+    in.now_us = in.last_imu_us = t;
+    SafetyDecision dec = fsm.update(in, 0.40f);
+    TEST_ASSERT_EQUAL(SystemState::FAILSAFE_DESCEND, dec.state);
+
+    // Mesmo um único pacote recebido com arm_switch = false DEVE cortar motores na hora!
+    t += 50000u;
+    in.now_us = in.last_imu_us = in.rc.timestamp_us = t;
+    in.rc.arm_switch = false;
+    dec = fsm.update(in, 0.05f);
+    TEST_ASSERT_EQUAL(SystemState::DISARMED, dec.state);
+    TEST_ASSERT_FALSE(dec.motors_armed);
+}
+
+// =============================================================================
+// 8. RETORNO FLYING -> ARMED_IDLE E BLOQUEIO DE AIRMODE EM POUSO INCLINADO
+// =============================================================================
+void test_landed_zero_throttle_returns_to_armed_idle_and_blocks_airmode_boost() {
+    QuadXMixer mixer;
+    mixer.configure(0.06f, 11.1f);
+
+    // Com allow_airmode = false (pouso c/ stick zerado em rampa), um comando forte de torque (+0.45)
+    // NÃO pode elevar o throttle p/ 100%: M1 (FR, -r) crava no idle (0.06) e M3 (RL, +r) limita em 0.17!
+    const MotorOutput m_no_air = mixer.mix(true, true, 0.0f, {0.45f, 0.0f, 0.0f}, 1.0f, 11.1f, false);
+    TEST_ASSERT_TRUE(mixer.was_saturated());
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.06f, m_no_air.throttle[0]); // M1 (FR, -r) cravado no idle (6%)
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.17f, m_no_air.throttle[2]); // M3 (RL, +r) contido em 17% (vs 100% s/ fix!)
+
+    // Verifica resolução contínua em float de to_pwm_us_f() (sem quantizar p/ inteiro)
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1345.6f, QuadXMixer::to_pwm_us_f(0.3456f, true));
+
+    // Verifica transição FLYING -> ARMED_IDLE após 1.0s pousado com throttle zerado e chassi quieto
+    SafetyStateMachine fsm;
+    uint32_t t = 1000000u;
+    SafetyInputs in = make_healthy_disarmed_inputs(t);
+    (void)fsm.update(in, 0.001f);
+    t += 1000u; in.now_us = in.last_imu_us = in.rc.timestamp_us = t;
+    in.rc.arm_switch = true;
+    (void)fsm.update(in, 0.001f);
+    t += 1000u; in.now_us = in.last_imu_us = in.rc.timestamp_us = t;
+    in.rc.throttle = 0.40f;
+    SafetyDecision dec = fsm.update(in, 0.001f);
+    TEST_ASSERT_EQUAL(SystemState::FLYING, dec.state);
+
+    // Baixa o throttle a zero imóvel no chão por 1.05s -> volta a ARMED_IDLE (in_air = false)!
+    in.rc.throttle = 0.0f;
+    in.gyro_norm_rads = 0.03f;
+    in.abs_climb_rate_ms = 0.02f;
+    for (int step = 0; step < 1050; ++step) {
+        t += 1000u;
+        in.now_us = in.last_imu_us = in.rc.timestamp_us = t;
+        dec = fsm.update(in, 0.001f);
+    }
+    TEST_ASSERT_EQUAL(SystemState::ARMED_IDLE, dec.state);
+    TEST_ASSERT_FALSE(dec.in_air);
+    TEST_ASSERT_TRUE(dec.motors_armed);
+}
+
 int main(int /*argc*/, char** /*argv*/) {
     UNITY_BEGIN();
     RUN_TEST(test_six_physical_perturbation_directions_in_quad_x);
@@ -283,5 +369,7 @@ int main(int /*argc*/, char** /*argv*/) {
     RUN_TEST(test_mixer_airmode_desaturation_and_vbat_compensation);
     RUN_TEST(test_safety_prearm_blocks_boot_with_arm_switch_already_on);
     RUN_TEST(test_two_stage_failsafe_recovery_and_crash_flip_cutoff);
+    RUN_TEST(test_failsafe_kill_switch_disarms_on_single_packet);
+    RUN_TEST(test_landed_zero_throttle_returns_to_armed_idle_and_blocks_airmode_boost);
     return UNITY_END();
 }

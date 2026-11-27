@@ -17,6 +17,9 @@ void SafetyStateMachine::reset() noexcept {
     observed_switch_disarmed_ = false;
     prev_arm_switch_ = false;
     state_elapsed_s_ = 0.0f;
+    landed_idle_timer_s_ = 0.0f;
+    last_seen_rc_us_ = 0;
+    fs_recovery_pkt_cnt_ = 0;
 }
 
 void SafetyStateMachine::set_bench_diagnostic_mode(bool active) noexcept {
@@ -76,6 +79,23 @@ SafetyDecision SafetyStateMachine::update(const SafetyInputs& in, float dt_s) no
     const bool rc_fresh_prearm = in.rc.link_alive && (rc_age_us <= cfg_.prearm_rc_max_age_us);
     const bool rc_fresh_flight = in.rc.link_alive && (rc_age_us <= cfg_.flight_rc_timeout_us);
 
+    const bool is_new_rc_pkt = in.rc.link_alive && (in.rc.timestamp_us != last_seen_rc_us_);
+    const uint32_t prev_pkt_gap_us = (last_seen_rc_us_ != 0u && in.rc.timestamp_us >= last_seen_rc_us_)
+                                         ? (in.rc.timestamp_us - last_seen_rc_us_)
+                                         : (cfg_.prearm_rc_max_age_us + 1u);
+    if (is_new_rc_pkt) {
+        if (prev_pkt_gap_us <= cfg_.prearm_rc_max_age_us) {
+            if (fs_recovery_pkt_cnt_ < 255u) {
+                ++fs_recovery_pkt_cnt_;
+            }
+        } else {
+            fs_recovery_pkt_cnt_ = 1u;
+        }
+        last_seen_rc_us_ = in.rc.timestamp_us;
+    } else if (!rc_fresh_prearm) {
+        fs_recovery_pkt_cnt_ = 0u;
+    }
+
     // Registra assim que enxergamos o controle vivo com a chave ARM desligada (OFF)
     if (rc_fresh_prearm && !in.rc.arm_switch) {
         observed_switch_disarmed_ = true;
@@ -90,6 +110,7 @@ SafetyDecision SafetyStateMachine::update(const SafetyInputs& in, float dt_s) no
         if (state_ != next) {
             state_ = next;
             state_elapsed_s_ = 0.0f;
+            landed_idle_timer_s_ = 0.0f;
         }
     };
 
@@ -125,7 +146,17 @@ SafetyDecision SafetyStateMachine::update(const SafetyInputs& in, float dt_s) no
             }
             break;
 
-        case SystemState::FLYING:
+        case SystemState::FLYING: {
+            const bool resting_zero_stick =
+                (in.rc.throttle <= cfg_.max_arm_throttle) &&
+                (in.gyro_norm_rads < 0.25f) &&
+                (in.abs_climb_rate_ms < 0.25f);
+            if (resting_zero_stick) {
+                landed_idle_timer_s_ += dt;
+            } else {
+                landed_idle_timer_s_ = 0.0f;
+            }
+
             // Prioridade 1: Kill-Switch soberano do piloto -> corta motores na hora!
             if (rc_fresh_flight && !in.rc.arm_switch) {
                 transition_to(SystemState::DISARMED);
@@ -137,24 +168,30 @@ SafetyDecision SafetyStateMachine::update(const SafetyInputs& in, float dt_s) no
             }
             // Prioridade 3: Perda de pacotes ESP-NOW > 300 ms -> Estágio 1 (Descida Nivelada)
             else if (!rc_fresh_flight) {
+                fs_recovery_pkt_cnt_ = 0u;
                 transition_to(SystemState::FAILSAFE_DESCEND);
             }
+            // Prioridade 4: Pouso manual confirmado c/ stick no zero -> volta p/ ARMED_IDLE
+            else if (cfg_.ground_return_s > 0.0f && landed_idle_timer_s_ >= cfg_.ground_return_s) {
+                transition_to(SystemState::ARMED_IDLE);
+            }
             break;
+        }
 
         case SystemState::FAILSAFE_DESCEND: {
             const float max_desc_s = in.baro_healthy
                                          ? cfg_.failsafe_max_baro_descend_s
                                          : cfg_.failsafe_max_descend_s;
+            const uint8_t req_pkts = std::max<uint8_t>(cfg_.failsafe_recovery_packets, 1u);
             if (!imu_fresh || in.tilt_cos < crash_flip_cos_) {
                 observed_switch_disarmed_ = false;
                 transition_to(SystemState::FAILSAFE_LOCKED);
-            } else if (rc_fresh_flight) {
-                // Link de rádio voltou no meio da descida!
-                if (in.rc.arm_switch) {
-                    transition_to(SystemState::FLYING);
-                } else {
-                    transition_to(SystemState::DISARMED);
-                }
+            } else if (rc_fresh_flight && !in.rc.arm_switch) {
+                // Kill-Switch continua soberano em 1 único pacote recebido!
+                transition_to(SystemState::DISARMED);
+            } else if (rc_fresh_prearm && fs_recovery_pkt_cnt_ >= req_pkts) {
+                // Link de rádio voltou de forma consistente (sem flapping de pacote isolado)!
+                transition_to(SystemState::FLYING);
             } else if (in.touchdown_detected ||
                        state_elapsed_s_ >= max_desc_s ||
                        (!in.allow_no_battery_bench && in.vbat_v > 5.0f &&

@@ -71,14 +71,26 @@ void MavlinkUsbBridge::on_drone_telemetry(const TelemFastPkt& pkt, uint32_t now_
 
 void MavlinkUsbBridge::on_drone_param_ack(const ParamSyncPkt& pkt) noexcept {
     if (pkt.op == PARAM_OP_ACK && pkt.param_idx < PARAM_COUNT) {
-        (void)set_param_by_index(shadow_params_, pkt.param_idx, pkt.value);
-        send_param_to_gcs(pkt.param_idx);
+        if (pkt.status == 0) {
+            (void)set_param_by_index(shadow_params_, pkt.param_idx, pkt.value);
+            send_param_to_gcs(pkt.param_idx);
+        }
         if (pending_tx_ && pkt.req_id == pending_pkt_.req_id) {
             pending_tx_ = false;
+            if (pending_pkt_.op == PARAM_OP_GET && pkt.status == 0 && pkt.param_idx == initial_pull_idx_) {
+                ++initial_pull_idx_;
+                if (initial_pull_idx_ >= PARAM_COUNT) {
+                    synced_from_drone_ = true;
+                }
+            }
         }
     } else if (pkt.op == PARAM_OP_SAVE_NVS && pending_tx_ && pkt.req_id == pending_pkt_.req_id) {
         pending_tx_ = false;
-        send_status_text(MAV_SEVERITY_INFO, "Parametros gravados na NVS do Drone!");
+        if (pkt.status == 0) {
+            send_status_text(MAV_SEVERITY_INFO, "Parametros gravados na NVS do Drone!");
+        } else {
+            send_status_text(MAV_SEVERITY_WARNING, "NVS bloqueado: desarme o drone antes!");
+        }
     }
 }
 
@@ -105,9 +117,7 @@ bool MavlinkUsbBridge::update(uint32_t now_ms, ParamSyncPkt& out_espnow_param_pk
             }
 
             if (rx.msgid == MSG_ID_PARAM_REQUEST_LIST) {
-                for (uint8_t i = 0; i < PARAM_COUNT; ++i) {
-                    send_param_to_gcs(i);
-                }
+                gcs_list_send_idx_ = 0;
             } else if (rx.msgid == MSG_ID_PARAM_REQUEST_READ) {
                 const auto req = rx.unpack<MsgParamRequestRead>();
                 int idx = req.param_index;
@@ -137,22 +147,49 @@ bool MavlinkUsbBridge::update(uint32_t now_ms, ParamSyncPkt& out_espnow_param_pk
                     send_param_to_gcs(static_cast<uint8_t>(idx));
                 }
             } else if (rx.msgid == MSG_ID_COMMAND_LONG) {
-                // Segurança soberana: recusa armamento pelo tablet, orientando usar a chave física!
                 const auto cmd = rx.unpack<MsgCommandLong>();
                 MsgCommandAck ack{};
                 ack.command = cmd.command;
                 ack.target_system = rx.sysid;
                 ack.target_component = rx.compid;
-                ack.result = MAV_RESULT_DENIED;
-                send_mav(MSG_ID_COMMAND_ACK, ack);
-                if (cmd.command == MAV_CMD_COMPONENT_ARM_DISARM) {
-                    send_status_text(MAV_SEVERITY_WARNING, "Use a chave fisica ARM no Controle!");
+
+                if (cmd.command == MAV_CMD_PREFLIGHT_STORAGE && cmd.param1 >= 0.5f) {
+                    request_save_params_to_drone_nvs();
+                    ack.result = MAV_RESULT_ACCEPTED;
+                    send_mav(MSG_ID_COMMAND_ACK, ack);
+                } else {
+                    // Segurança soberana: recusa armamento pelo tablet, orientando usar a chave física!
+                    ack.result = MAV_RESULT_DENIED;
+                    send_mav(MSG_ID_COMMAND_ACK, ack);
+                    if (cmd.command == MAV_CMD_COMPONENT_ARM_DISARM) {
+                        send_status_text(MAV_SEVERITY_WARNING, "Use a chave fisica ARM no Controle!");
+                    }
                 }
             }
         }
     }
 
+    // Streaming cadenciado de PARAM_VALUE (2 quadros = 74 B por tick) p/ não saturar FIFO USB-CDC
+    if (gcs_list_send_idx_ < PARAM_COUNT) {
+        for (int k = 0; k < 2 && gcs_list_send_idx_ < PARAM_COUNT; ++k) {
+            send_param_to_gcs(gcs_list_send_idx_++);
+        }
+    }
+
     const bool link_fresh = has_telem_ && ((now_ms - last_telem_ms_) < 1000u);
+
+    // Sincronização automática inicial: puxa todos os 19 parâmetros reais da NVS do drone ao parear!
+    if (link_fresh && !synced_from_drone_ && !pending_tx_ && initial_pull_idx_ < PARAM_COUNT) {
+        pending_pkt_ = ParamSyncPkt{};
+        pending_pkt_.type = PKT_PARAM_SYNC;
+        pending_pkt_.req_id = next_req_id_++;
+        pending_pkt_.op = PARAM_OP_GET;
+        pending_pkt_.param_idx = initial_pull_idx_;
+        seal_packet(pending_pkt_);
+        pending_tx_ = true;
+        retry_count_ = 0;
+        last_param_tx_ms_ = 0;
+    }
 
     // 2. HEARTBEAT (1 Hz)
     if (now_ms - last_hb_ms_ >= 1000u) {

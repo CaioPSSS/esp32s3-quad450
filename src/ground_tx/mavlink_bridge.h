@@ -16,8 +16,9 @@ namespace fc::tx {
  * Responsabilidades:
  * 1. Converte `TelemFastPkt` do drone em `HEARTBEAT`, `SYS_STATUS`, `ATTITUDE`, `VFR_HUD`,
  *    `SERVO_OUTPUT_RAW` e alertas `STATUSTEXT` claros de Pre-Arm/Failsafe!
- * 2. Sincroniza os 15 parâmetros de voo (`FlightParams`) com o drone via `ParamSyncPkt`
- *    com confirmação ACK e retransmissão automática caso um pacote de rádio se perca!
+ * 2. Sincroniza automaticamente os 19 parâmetros de voo (`FlightParams`) a partir da NVS real
+ *    do drone ao conectar, aplica ajustes ao vivo com confirmação ACK/Retry e suporta gravação
+ *    remota na NVS via `MAV_CMD_PREFLIGHT_STORAGE` ou botão físico `[AUX]`!
  */
 class MavlinkUsbBridge {
 public:
@@ -35,6 +36,7 @@ public:
     void request_save_params_to_drone_nvs() noexcept;
 
     const proto::FlightParams& shadow_params() const noexcept { return shadow_params_; }
+    bool is_synced_from_drone() const noexcept { return synced_from_drone_; }
 
 private:
     template <typename MsgT>
@@ -59,6 +61,9 @@ private:
 
     // Sincronização confiável de parâmetros com o drone via ACK/Retry
     proto::FlightParams shadow_params_{};
+    bool synced_from_drone_ = false;
+    uint8_t initial_pull_idx_ = 0;
+    uint8_t gcs_list_send_idx_ = proto::PARAM_COUNT;
     bool pending_tx_ = false;
     proto::ParamSyncPkt pending_pkt_{};
     uint32_t last_param_tx_ms_ = 0;

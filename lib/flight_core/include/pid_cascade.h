@@ -34,7 +34,8 @@ public:
                  float gyro_measured_rads,
                  float dt_s,
                  bool allow_integration,
-                 bool mixer_saturated) noexcept;
+                 bool mixer_saturated,
+                 bool bleed_integration = false) noexcept;
 
     float last_p() const noexcept { return last_p_; }
     float last_i() const noexcept { return last_i_; }
@@ -83,7 +84,8 @@ public:
                                    const Vec3f& gyro_filt_rads,
                                    float dt_s,
                                    bool in_air,
-                                   bool mixer_saturated) noexcept;
+                                   bool mixer_saturated,
+                                   bool bleed_integration = false) noexcept;
 
     const RateAxisPID& roll_rate_pid() const noexcept { return roll_pid_; }
     const RateAxisPID& pitch_rate_pid() const noexcept { return pitch_pid_; }

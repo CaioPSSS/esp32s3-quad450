@@ -1,6 +1,13 @@
-# Pesquisa Aprofundada: Construindo um Quadricóptero Barato com ESP32 (Sem Impressora 3D)
+# Pesquisa Exploratória Inicial: Caminhos para um Quadricóptero DIY com ESP32 (Sem Impressora 3D)
 
-Este documento reúne um panorama amplo de **arquiteturas de software, combinações de hardware, estratégias de estrutura sem impressora 3D, projetos open-source de referência e ideias alternativas** para construir um drone de 4 hélices econômico baseado em ESP32. O objetivo nesta fase é abrir o leque de possibilidades para, na sequência, afunilarmos a engenharia e a lista exata de materiais (BOM).
+> [!NOTE]
+> **Documento Histórico da Fase 0 (Brainstorming e Comparação de Caminhos):** Este arquivo registra o levantamento amplo inicial que comparou micro-drones *brushed* vs. 450 mm *brushless* e firmwares prontos vs. código próprio.
+> **Para comprar peças, montar o hardware e operar o código fechado do projeto (Revisão Unificada `v2.1`), utilize os documentos oficiais:**
+> 1. [**Validação de Engenharia Multidisciplinar, FMEA & BOM Definitiva v2.1**](validacao_engenharia_e_bom_otimizada.md)
+> 2. [**Manual de Montagem Milimétrico Passo a Passo v2.1 (Portões 1 a 8)**](manual_montagem_detalhado_450.md)
+> 3. [**Especificação Mestre de Arquitetura de Software v2.1**](arquitetura_software_esp32s3.md) & [**Visão Geral do Sistema v2.1**](arquitetura_drone_esp32s3_450.md)
+
+Este documento reúne um panorama amplo de **arquiteturas de software, combinações de hardware, estratégias de estrutura sem impressora 3D, projetos open-source de referência e ideias alternativas** para construir um drone de 4 hélices econômico baseado em ESP32.
 
 ---
 

@@ -3,7 +3,7 @@
 Teste End-to-End de Integração MAVLink v2 contra o binário C++ sitl_pc usando pymavlink oficial.
 Prova 100% de compatibilidade de protocolo binário com QGroundControl / MAVProxy:
   1. Recebe HEARTBEAT, SYS_STATUS, ATTITUDE, VFR_HUD e SERVO_OUTPUT_RAW via UDP.
-  2. Solicita PARAM_REQUEST_LIST e valida o recebimento de todos os 15 parâmetros.
+  2. Solicita PARAM_REQUEST_LIST e valida o recebimento de todos os 19 parâmetros.
   3. Altera RATE_RP_KP ao vivo via PARAM_SET e confirma eco atualizado.
   4. Envia COMMAND_LONG (MAV_CMD_COMPONENT_ARM_DISARM) e confirma COMMAND_ACK + flag ARMED!
 """
