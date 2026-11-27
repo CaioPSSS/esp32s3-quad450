@@ -18,6 +18,8 @@ flowchart TD
     V --> P6["6. Estabilidade de Controle (Bode) & Segurança RTOS"]
 ```
 
+![CAD-07 — Painel Analítico v2.1: Estabilidade Bode, Ressonância Modal, Orçamento RF Friis e Linearidade ADC1](assets/cad_07_validacao_engenharia_v21.png)
+
 ---
 
 ### Pilar 1: Geometria 3D, Folga de Hélices e Furação Sem Colisão
@@ -38,11 +40,13 @@ flowchart TD
    - Os 4 braços entram nas diagonais a $\pm 45^\circ$ (da ponta interna `r = 20 mm` até a borda da chapa). A distância perpendicular de um furo $(x, y)$ até o eixo central do braço diagonal ($|x| = |y|$) é:
      $$d_\perp = \frac{||y| - |x||}{\sqrt{2}}$$
    - **Por que o padrão quadrado/largo antigo `(±30, ±40) mm` falhava:** com $x = 30, y = 40$, tem-se $d_\perp = 10/\sqrt{2} = 7,07\text{ mm}$. Somando meia largura de um braço de `15 mm` (`7,50 mm`) + metade da porca/damper M3 (`3,50 mm` = `11,00 mm` necessários), ocorria **interferência física de `-3,93 mm`** (o parafuso do damper batia em cima do braço!).
-   - **Gabarito Oficial v2.1 (`X = ±22 mm` Largura Esq-Dir × `Y = ±42 mm` Comprimento Frente-Trás):**
-     $$d_\perp = \frac{|42 - 22|}{\sqrt{2}} = \mathbf{14,14\text{ mm}}$$
-     - No braço de madeira `15×15 mm`: folga livre real de **`+3,14 mm`** para porca/damper M3!
-     - No braço de alumínio `12,7×12,7 mm` (`1/2"`): folga livre real de **`+4,29 mm`**!
-     - Na placa perfurada `70 × 90 mm`: os furos ficam a `13,0 mm` das bordas laterais (`35 - 22`) e `3,0 mm` de borda livre além da cabeça/porca M3 nas extremidades longitudinais (`45 - 42 = 3 mm`, ou centro do furo a `4,5 mm` da borda caso prefira usar `Y = ±40,5 mm` mantendo $d_\perp = 13,08\text{ mm}$ com `+2,08 mm` de folga livre!). Padronizamos **`X = ±22,0 mm, Y = ±41,0 mm`** (furos a `4,0 mm` da borda superior/inferior da placa `70×90 mm` e $d_\perp = 13,44\text{ mm} \Rightarrow +2,44\text{ mm}$ a `+3,59 mm` de folga limpa dos braços!).
+   - **Gabarito Oficial v2.1 (`X = ±22,0 mm` Largura Esq-Dir × `Y = ±41,0 mm` Comprimento Frente-Trás):**
+     $$d_\perp = \frac{|41 - 22|}{\sqrt{2}} = \mathbf{13,44\text{ mm}}$$
+     - No braço de madeira `15×15 mm`: folga livre real de **`+2,44 mm`** para porca/damper M3!
+     - No braço de alumínio `12,7×12,7 mm` (`1/2"`): folga livre real de **`+3,59 mm`**!
+     - Na placa perfurada `70 × 90 mm`: os furos ficam a `13,0 mm` das bordas laterais e `4,0 mm` da borda superior/inferior!
+
+![CAD-02 — Gabarito Geométrico Cotado 120×120 mm sem Colisão entre Dampers M3 e Braços](assets/cad_02_gabarito_chapa_central_120x120.png)
 
 ---
 

@@ -38,6 +38,8 @@ flowchart LR
     end
 ```
 
+![CAD-00 — Planta Geométrica Quad-X 450 mm em Escala Real e Corte Ortogonal do Empilhamento](assets/cad_00_drone_overview_450.png)
+
 ---
 
 ## 2. Resumo das Especificações Físicas e de Desempenho (`v2.1`)

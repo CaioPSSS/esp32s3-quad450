@@ -17,14 +17,7 @@ Este guia foi projetado como um **manual de bancada industrial à prova de erros
 #### 1. Conferência da Antena Externa IPEX nos 2× `ESP32-S3`
 Olhe para a blindagem metálica no topo das suas duas placas `ESP32-S3`:
 
-```text
-CASO A: Módulo ESP32-S3-WROOM-1U Original        CASO B: Placa Clone YD-ESP32-S3 N16R8
-   +-----------------------+                        +-----------------------+
-   |   (SEM trilha preta)  |                        |  |_|¯|_|¯|_ (Ant PCB) | <-- Tem antena impressa!
-   |    (o) <- Só IPEX     |                        |  [1][2][3]   (o) IPEX | <-- Jumper de 3 pads!
-   | +-------------------+ |                        | +-------------------+ |
-   | | Blindagem Metálica| |                        | | Blindagem Metálica| |
-```
+![CAD-01 — Inspeção de Recebimento RF IPEX, Conector SMA e Buzzer NPN KY-012](assets/cad_01_inspecao_ipex_buzzer.png)
 
 - **CASO A (`WROOM-1U` autêntico):** O conector IPEX já vem ativo de fábrica. Basta alinhar o *pigtail* IPEX1 perfeitamente plano e pressionar com a unha até ouvir um *"click"* firme.
 - **CASO B (`YD-ESP32-S3` com antena PCB + IPEX):** Vem de fábrica ligada na antena impressa! Com lupa/câmera macro, localize o resistor minúsculo `0 Ω` ao lado do conector IPEX e mova-o (ou faça uma micro-ponte limpa de estanho) ligando o **pad central** do chip ao **pad do conector IPEX** (desconectando a antena PCB).
@@ -47,6 +40,8 @@ CASO A: Módulo ESP32-S3-WROOM-1U Original        CASO B: Placa Clone YD-ESP32-S
 
 ## Etapa 1: Construção Mecânica do Chassi Híbrido 450 mm (`v2.1`)
 
+![CAD-00 — Planta Geométrica do Quadricóptero 450 mm (Quad-X FRD) e Corte Ortogonal do Empilhamento](assets/cad_00_drone_overview_450.png)
+
 ### 1.1 Gabarito Oficial das 2 Chapas Centrais (`120 × 120 mm`, Compensado Naval `4 mm`)
 Para obter precisão de décimos de milímetro sem CNC, **furamos as duas chapas empilhadas juntas**:
 
@@ -65,27 +60,7 @@ Para obter precisão de décimos de milímetro sem CNC, **furamos as duas chapas
 6. Na **Chapa Superior apenas** (depois de furar todos os furos `M3` com **broca `3,0 mm` ou `3,2 mm`**), você pode abrir um furo central redondo de `Ø 16 mm` em `(0, 0)` para subir os fios de `5V/GND/VBAT` da PDB, mantendo intactos os furos de `32 mm`!
 7. Chanfre `10 mm` nos 4 cantos externos e lixe com grão `220`.
 
-```text
-          VISTA SUPERIOR DA CHAPA CENTRAL v2.1 (120 x 120 mm)
-                       [ ↑ FRENTE DO DRONE (+Y) ↑ ]
-       Canto FL (M4 CW)                         Canto FR (M1 CCW)
-            +---------------------------------------+
-            |\  (68mm)                     (68mm)  /|
-            | \   O     o(-22,+41) (+22,+41)o O   / | <-- Dampers M3 c/ folga real dos braços!
-            |  \        +-----[70x90 FC]----+    /  |
-            |   \       |                   |   /   |
-            |    \  O   |                   | O/    | <-- Furos internos dos braços (r = 32 mm)
-   ESQ (-X) |     \32mm |       (0,0)       | /32mm | DIR (+X)
-            |           |         +         |       |
-            |     /32mm |                   | \32mm |
-            |    /  O   |                   | O\    |
-            |   /       +-------------------+   \   |
-            |  /        o(-22,-41) (+22,-41)o    \  |
-            | /   O                           O   \ |
-            |/  (68mm)                     (68mm)  \|
-            +---------------------------------------+
-       Canto RL (M3 CCW)                        Canto RR (M2 CW)
-```
+![CAD-02 — Gabarito de Corte e Furação das Chapas Centrais 120×120 mm e Tabela de Coordenadas](assets/cad_02_gabarito_chapa_central_120x120.png)
 
 ---
 
@@ -94,22 +69,7 @@ Corte **4 barras idênticas de `225,0 mm`** (com esquadro nas pontas):
 - **Se usar Madeira (Fase 1):** Use obrigatoriamente seção mínima **`15 × 15 mm`** ($f_{n1} = 101,3\text{ Hz}$, evitando a ressonância de `76 Hz` de perfis finos de `13 mm`).
 - **Se usar Tubo de Alumínio `1/2" × 1/2"` (`12,7 × 12,7 mm`, parede `1,0–1,2 mm`):** Antes de furar, lixe **4 buchas maciças de madeira dura de `55 mm` de comprimento** e insira sob pressão na extremidade interna (`0..55 mm`) de cada tubo (e opcionalmente um toquinho de `28 mm` na ponta do motor `192..220 mm`). Isso impede 100% que o aperto dos parafusos `M3` amasse a parede fina do alumínio!
 
-```text
-   GABARITO DE CADA BRAÇO (225 mm de comprimento — linha de centro da face superior)
-
-   |<-------------------- 225,0 mm -------------------->|
-   +----------------------------------------------------+
-   |    O          O                         O  (Ø8)  O |
-   +----------------------------------------------------+
-   0  12,0mm     48,0mm                    197  205  213mm  225mm
-   ^    ^          ^                        ^    ^    ^
-   |    |          |                        |    |    +-- Furo Motor Ext M3 (213,0mm p/ base 16mm | 214,5mm p/ 19mm)
-   |    |          |                        |    +------- Alívio trava eixo (Ø 8,0 mm, prof. 4 mm) = Raio 225 mm do drone!
-   |    |          |                        +------------ Furo Motor Int M3 (197,0mm p/ base 16mm | 195,5mm p/ 19mm)
-   |    |          +------------------------------------- Furo Chassi Externo M3 (casa c/ r = 68 mm da chapa)
-   |    +------------------------------------------------ Furo Chassi Interno M3 (casa c/ r = 32 mm da chapa)
-   +----------------------------------------------------- Ponta interna (fica a r = 20 mm do centro (0,0))
-```
+![CAD-03 — Gabarito de Furação dos 4 Braços de 225,0 mm e Detalhe de Segurança do Parafuso no Motor A2212](assets/cad_03_gabarito_braco_225mm_e_motor.png)
 
 - **Endurecimento dos Furos na Madeira (Obrigatório):** Pingue **2 gotas de cianoacrilato líquido (*Super Bonder*)** na parede interna de todos os furos `M3` da madeira (sem parafuso!) e aguarde **15 minutos** curar antes da montagem.
 
@@ -156,32 +116,7 @@ Corte **4 barras idênticas de `225,0 mm`** (com esquadro nas pontas):
 3. **`ESP32-S3-DevKitC-1`:** Em **2 barras de pinos fêmea de 22 vias** na metade esquerda, com as **portas USB-C voltadas para a Traseira** (fácil acesso ao cabo USB).
 4. **Soquete `DIP-14` (`SN74HCT125N`):** Na metade direita, ao lado das 4 barras de `2 pinos machos` (`Sinal + GND`) dos ESCs `M1..M4`.
 
-```text
-             LAYOUT VISTA DE TOPO — PLACA PERFURADA 70 x 90 mm (v2.1)
-                             [ ↑ FRENTE DO DRONE (+Y) ↑ ]
-   +-----------------------------------------------------------------------+
-   |       (O) Damper (-22,+41)                 Damper (+22,+41) (O)       |
-   |                                                                       |
-   |   [Header 6p GPS/Mag Fase 2]          [BMP280 I2C c/ espuma porosa!]  |
-   |   (+5V_SYS, GND, TX17, RX18, SDA8, SCL9)                              |
-   |                                                                       |
-   |   +--------------------+              +---------------------------+   |
-   |   |                    |              |  [M4 FL] [M1 FR] (Sinal + |   |
-   |   |                    |  +--------+  |  [M3 RL] [M2 RR]   GND)   |   |
-   |   |   ESP32-S3-WROOM   |  |  ICM   |  |                           |   |
-   |   |    DevKitC-1       |  |42688-P |  |   +-------------------+   |   |
-   |   |  (2x Header 22p)   |  | (0,0)! |  |   | Soquete DIP-14    |   |   |
-   |   |                    |  +--------+  |   |   SN74HCT125N     |   |   |
-   |   |   [IPEX -> SMA]    |              |   +-------------------+   |   |
-   |   |                    |              |                           |   |
-   |   |                    |              |  [1N5819] [Buzzer KY-012] |   |
-   |   |   [USB]   [UART]   |              |  [Divisor VBAT 39k / 10k] |   |
-   |   +--------------------+              +---------------------------+   |
-   |                                                                       |
-   |       (O) Damper (-22,-41)                 Damper (+22,-41) (O)       |
-   +-----------------------------------------------------------------------+
-                             [ ↓ TRASEIRA DO DRONE (-Y) ↓ ]
-```
+![CAD-04 — Layout Físico em Escala e Esquemático Elétrico Vetorial da Placa Controladora 70×90 mm FR4](assets/cad_04_layout_placa_fc_70x90.png)
 
 ---
 
@@ -234,21 +169,7 @@ Corte **4 barras idênticas de `225,0 mm`** (com esquadro nas pontas):
 
 ## Etapa 4: Construção do Controle Caseiro Long-Range (`ground_tx` v2.1)
 
-```text
-       PAINEL FRONTAL DO CONTROLE CASEIRO (Caixa Patola ~15 x 10 x 5 cm)
-    +-------------------------------------------------------------------+
-    |  [SW1: ARM / KILL]        [Antena SMA ↑]       [SW2: MODO 3-POS]  |
-    |   (Cima=SAFE/OFF!)                             (STAB / ALTH / CINE)|
-    |                        +------------------+                       |
-    |      (Gimbal Esq.)     |  OLED 0.96" I2C  |      (Gimbal Dir.)    |
-    |         ( | )          | DISARMED STAB -58|         ( + )        |
-    |       Throttle ↑↓      | 3S:12.4V TX:4.1V |        Pitch ↑↓       |
-    |       (sem mola!)      | OK P/ ARMAR      |        Roll  ←→       |
-    |         Yaw ←→         +------------------+       (com mola)      |
-    |                             [Botão AUX]                           |
-    +-------------------------------------------------------------------+
-                         [Porta USB-C Nativa ↓ OTG p/ QGroundControl]
-```
+![CAD-05 — Gabarito Frontal Mecânico (Mode 2) e Esquemático Vetorial Anti-Saturação do Controle Caseiro](assets/cad_05_painel_controle_ground_tx.png)
 
 ### 4.1 Circuito Anti-Saturação `ADC1` dos 4 Potenciômetros (`Resistor Topo 560 Ω` — v2.1!)
 Para que os potenciômetros nunca passem de `2,90 V` (onde o `ADC1` do ESP32-S3 satura perdendo `12%` de curso nos cantos):
@@ -283,16 +204,7 @@ Para que os potenciômetros nunca passem de `2,90 V` (onde o `ADC1` do ESP32-S3 
 > [!IMPORTANT]
 > **Jamais faça o primeiro teste com hélices soltando o drone direto do chão!** Na **Gangorra 1-Eixo**, você valida sinais, testa resposta a rajadas empurrando o braço com uma vareta e afina o PID com segurança absoluta.
 
-```text
-                  BANCADA GANGORRA 1-EIXO (Feita c/ retalhos de madeira)
-
-                     (M4)=========[ DRONE ]=========(M1)
-                                     ||  <-- Preso c/ abraçadeiras na ripa giratória
-                           ==========()==========  <-- Haste/parafuso M5 como eixo livre s/ atrito!
-                                    /  \
-                                   /    \   <-- 2 Colunas de 25 cm (hélices longe da base!)
-                        ========================  <-- Base pesada 40x40 cm presa c/ sargento/peso
-```
+![CAD-06 — Bancada Mecânica Gangorra 1-Eixo Cotada com Limitador Físico de ±35°](assets/cad_06_bancada_gangorra_1eixo.png)
 
 - Duas colunas verticais de `25 cm` afastadas `36 cm` sustentam um eixo livre onde o centro `(0, 0)` do drone gira em apenas 1 eixo por vez (primeiro **Roll**, depois girado `90°` para **Pitch**), com cordão limitador de segurança em `±35°`.
 
